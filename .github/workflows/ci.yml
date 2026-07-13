@@ -1,0 +1,87 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  # Every feature except `permissions`, which is Unix-only (§9.6) — its
+  # `nix` dependency doesn't exist for non-Unix targets.
+  WINDOWS_FEATURES: operations,analyze,checksum,watch,compress,sync,diagnostics
+
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all -- --check
+
+  clippy:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: clippy (all features valid for this OS)
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cargo clippy --no-default-features --features "$WINDOWS_FEATURES" --all-targets -- -D warnings
+          else
+            cargo clippy --all-features --all-targets -- -D warnings
+          fi
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: test (default features)
+        run: cargo test
+      - name: test (all features valid for this OS)
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            cargo test --no-default-features --features "$WINDOWS_FEATURES"
+          else
+            cargo test --all-features
+          fi
+
+  # Every single feature and every pair (`cargo hack --feature-powerset
+  # --depth 2`) — catches a bad `#[cfg(feature = ...)]` in an untested
+  # combination without paying for the full 2^8 powerset. Runs on Ubuntu
+  # only: it's a compile-correctness sweep across feature *combinations*,
+  # not a cross-platform check (that's `test`'s job) — `permissions` is
+  # exercised here since Ubuntu is Unix.
+  feature-matrix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-hack
+      - run: cargo hack check --feature-powerset --depth 2 --no-dev-deps
+
+  # Pinned to the floor declared in Cargo.toml's `rust-version` (§9.4).
+  # Catches the case where a `cargo update` bumps a transitive dependency's
+  # own MSRV past what we declare, without anyone touching this crate's
+  # Cargo.toml.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88
+      - run: cargo check --all-features

@@ -1,0 +1,51 @@
+[package]
+name = "file-engine"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT"
+description = "Async, cross-platform file operations engine for desktop apps and developer tools: copy, move, analyze, watch, compress, and sync files with progress reporting and cancellation."
+repository = "https://github.com/<author>/file-engine"
+readme = "README.md"
+keywords = ["filesystem", "io", "async", "tokio", "copy"]
+categories = ["filesystem", "asynchronous"]
+
+[features]
+default     = ["operations", "analyze"]
+
+operations  = []
+analyze     = ["dep:walkdir", "dep:infer"]
+checksum    = ["analyze", "dep:blake3"]
+watch       = ["dep:notify"]
+compress    = ["dep:zip", "dep:flate2"]
+permissions = ["operations", "dep:nix"]
+sync        = ["operations", "analyze"]
+diagnostics = ["dep:error-engine"]
+
+[dependencies]
+tokio = { version = "1", features = ["fs", "rt", "rt-multi-thread", "macros", "sync", "io-util"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["rt"] }
+thiserror = "1"
+
+walkdir      = { version = "2",   optional = true }
+infer        = { version = "0.16", optional = true }
+blake3       = { version = "1",   optional = true }
+notify       = { version = "6",   optional = true }
+zip          = { version = "2",   optional = true }
+flate2       = { version = "1",   optional = true }
+error-engine = { version = "0.2", optional = true }
+
+# `nix` is Unix-only (`#![cfg(unix)]` internally) — see §9.6. Declaring it
+# here rather than in `[dependencies]` means enabling `permissions` on a
+# non-Unix target simply never activates `nix` (Cargo treats the request as
+# inert, not an error) instead of trying to pull in a crate that can't
+# build there. The actual safety comes from gating `mod permissions;` in
+# lib.rs on `unix` too, so `.preserve_permissions()` doesn't exist at all
+# on non-Unix targets.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+tempfile = "3"

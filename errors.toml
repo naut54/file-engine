@@ -1,0 +1,27 @@
+[FE_SOURCE_NOT_FOUND]
+template = "source not found: {path}"
+hint = "Check that the source path exists before starting the operation."
+
+[FE_DEST_EXISTS]
+template = "destination already exists: {path}"
+hint = "Pass `.overwrite(true)` if you intend to replace the destination."
+
+[FE_CANCELLED]
+template = "operation cancelled"
+
+[FE_NO_SPACE]
+template = "insufficient disk space: needed {needed} bytes, available {available} bytes"
+
+[FE_PERMISSION_DENIED]
+template = "permission denied: {path}"
+
+[FE_IO]
+template = "io error on {path}: {source}"
+
+[FE_UNKNOWN_COMPRESS_FORMAT]
+template = "could not infer compression format from destination: {path}"
+hint = "Pass `.format(...)` explicitly, or use a `.zip`/`.gz` extension."
+
+[FE_GZIP_REQUIRES_FILE]
+template = "gzip compression requires a single file, got a directory: {path}"
+hint = "Use `.format(CompressFormat::Zip)` to compress a directory."
