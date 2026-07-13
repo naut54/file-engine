@@ -3,11 +3,12 @@ use std::path::PathBuf;
 use std::pin::Pin;
 use std::task::{Context, Poll};
 
+use notify::{EventKind, RecursiveMode, Watcher};
 use tokio_stream::wrappers::UnboundedReceiverStream;
 use tokio_util::sync::CancellationToken;
 
 use crate::engine::FileEngine;
-use crate::error::{FileEngineError, Result};
+use crate::error::{from_io, FileEngineError, Result};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WatchEventKind {
@@ -21,6 +22,19 @@ pub enum WatchEventKind {
 pub struct WatchEvent {
     pub kind: WatchEventKind,
     pub paths: Vec<PathBuf>,
+}
+
+fn map_event(event: notify::Event) -> WatchEvent {
+    let kind = match event.kind {
+        EventKind::Create(_) => WatchEventKind::Created,
+        EventKind::Modify(_) => WatchEventKind::Modified,
+        EventKind::Remove(_) => WatchEventKind::Removed,
+        _ => WatchEventKind::Other,
+    };
+    WatchEvent {
+        kind,
+        paths: event.paths,
+    }
 }
 
 /// `watch` is a continuous stream of filesystem events with no single final
@@ -53,18 +67,38 @@ impl WatchBuilder {
 
     pub fn start(self) -> Result<WatchHandle> {
         let cancel_token = self.cancel_token.unwrap_or_default();
-        let (_events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (events_tx, events_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (error_tx, mut error_rx) = tokio::sync::mpsc::unbounded_channel::<notify::Error>();
 
         let task_cancel_token = cancel_token.clone();
+        let path = self.path;
+        let recursive = self.recursive;
+
         let join = tokio::spawn(async move {
-            let _ = &task_cancel_token;
-            // TODO(implementation): own a `notify::RecommendedWatcher` on
-            // `self.path` (honoring `self.recursive`), map its events to
-            // `WatchEvent`, and forward them via `_events_tx` until
-            // `task_cancel_token` is cancelled or the watcher errors.
-            let _ = self.path;
-            let _ = self.recursive;
-            Ok(())
+            let mut watcher =
+                notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+                    Ok(event) => {
+                        let _ = events_tx.send(map_event(event));
+                    }
+                    Err(err) => {
+                        let _ = error_tx.send(err);
+                    }
+                })
+                .map_err(|e| from_io(path.clone(), std::io::Error::other(e)))?;
+
+            let mode = if recursive {
+                RecursiveMode::Recursive
+            } else {
+                RecursiveMode::NonRecursive
+            };
+            watcher
+                .watch(&path, mode)
+                .map_err(|e| from_io(path.clone(), std::io::Error::other(e)))?;
+
+            tokio::select! {
+                _ = task_cancel_token.cancelled() => Ok(()),
+                Some(err) = error_rx.recv() => Err(from_io(path.clone(), std::io::Error::other(err))),
+            }
         });
 
         Ok(WatchHandle {

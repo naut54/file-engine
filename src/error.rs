@@ -34,6 +34,29 @@ pub enum FileEngineError {
 
 pub type Result<T> = std::result::Result<T, FileEngineError>;
 
+/// Maps a raw `io::Error` to the closest `FileEngineError` variant, used by
+/// every module that touches the filesystem directly.
+///
+/// `InsufficientSpace`'s `available` is always reported as `0`: there is no
+/// disk-space-query dependency in this crate (out of scope for this pass),
+/// so the only thing known for certain when `ErrorKind::StorageFull` occurs
+/// is that the write failed, not how much space actually exists.
+// Every feature that touches the filesystem uses this, but with every
+// filesystem-touching feature off (`--no-default-features`) nothing calls
+// it — `error.rs` itself has no feature gate (§5.1), so it's still compiled.
+#[allow(dead_code)]
+pub(crate) fn from_io(path: PathBuf, source: std::io::Error) -> FileEngineError {
+    match source.kind() {
+        std::io::ErrorKind::NotFound => FileEngineError::SourceNotFound(path),
+        std::io::ErrorKind::PermissionDenied => FileEngineError::PermissionDenied(path),
+        std::io::ErrorKind::StorageFull => FileEngineError::InsufficientSpace {
+            needed: 0,
+            available: 0,
+        },
+        _ => FileEngineError::Io { path, source },
+    }
+}
+
 #[cfg(feature = "diagnostics")]
 use error_engine::{EngineDiagnostic, Severity};
 

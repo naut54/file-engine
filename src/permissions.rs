@@ -7,18 +7,16 @@ use crate::operations::{CopyBuilder, MoveBuilder};
 
 #[cfg(feature = "permissions")]
 impl CopyBuilder {
-    pub fn preserve_permissions(self, _enabled: bool) -> Self {
-        // TODO(implementation): thread this through to the copy task and
-        // apply `nix`-based permission preservation on the destination.
+    pub fn preserve_permissions(mut self, enabled: bool) -> Self {
+        self.preserve_permissions = enabled;
         self
     }
 }
 
 #[cfg(feature = "permissions")]
 impl MoveBuilder {
-    pub fn preserve_permissions(self, _enabled: bool) -> Self {
-        // TODO(implementation): thread this through to the move task and
-        // apply `nix`-based permission preservation on the destination.
+    pub fn preserve_permissions(mut self, enabled: bool) -> Self {
+        self.preserve_permissions = enabled;
         self
     }
 }

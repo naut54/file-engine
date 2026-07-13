@@ -98,7 +98,7 @@ operations  = []
 analyze     = ["dep:walkdir", "dep:infer"]
 checksum    = ["analyze", "dep:blake3"]
 watch       = ["dep:notify"]
-compress    = ["dep:zip", "dep:flate2"]
+compress    = ["dep:zip", "dep:flate2", "dep:walkdir"]
 permissions = ["operations", "dep:nix"]
 sync        = ["operations", "analyze"]
 diagnostics = ["dep:error-engine"]
@@ -137,7 +137,10 @@ operations ◄── sync
 analyze    ◄── checksum
 analyze    ◄── sync
 watch        (independent)
-compress      (independent)
+compress      (independent — but shares the `walkdir` *crate* with `analyze`
+               for directory-tree archiving; that's a shared dependency, not
+               a feature edge, so `compress` still doesn't cascade-enable
+               `analyze`)
 diagnostics   (independent)
 ```
 
