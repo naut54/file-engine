@@ -1,10 +1,10 @@
 [package]
 name = "file-engine"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
-description = "Async, cross-platform file operations engine for desktop apps and developer tools: copy, move, analyze, watch, compress, and sync files with progress reporting and cancellation."
+description = "Async, cross-platform file operations engine for desktop apps and developer tools: copy, move, sync, watch, and compress files with progress reporting and cancellation."
 repository = "https://github.com/<author>/file-engine"
 readme = "README.md"
 keywords = ["filesystem", "io", "async", "tokio", "copy"]
@@ -50,14 +50,29 @@ tokio = { version = "1", features = ["full"] }
 tempfile = "3"
 filetime = "0.2"
 
-# Unlike with_diagnostics.rs (internally #[cfg]-gated with a fallback
-# stub main()), this example calls `.copy()` unconditionally — gating it
-# here means Cargo just skips building it for feature sets without
-# `operations`, instead of failing the whole build (e.g. `--features watch`
-# alone, which doesn't imply `operations`).
+# Each example below calls its operation unconditionally — gating it
+# here means Cargo just skips building it for feature sets that don't
+# include what it needs, instead of failing the whole build (e.g.
+# `--features watch` alone, which doesn't imply `operations`).
 [[example]]
 name = "basic_copy"
 required-features = ["operations"]
+
+[[example]]
+name = "basic_move"
+required-features = ["operations"]
+
+[[example]]
+name = "basic_sync"
+required-features = ["sync"]
+
+[[example]]
+name = "basic_watch"
+required-features = ["watch"]
+
+[[example]]
+name = "basic_compress"
+required-features = ["compress"]
 
 [target."cfg(unix)".dependencies]
 libc = { version = "0.2", optional = true }

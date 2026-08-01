@@ -6,6 +6,16 @@ Every operation returns a `Handle<T>` (or `WatchHandle` for `watch`) from
 [progress-and-cancellation.md](progress-and-cancellation.md) for the full
 contract.
 
+The snippets below are trimmed for readability. Runnable, CLI-driven
+versions of each — real progress output, full outcome summaries, proper
+argument handling — live in [`examples/`](../../examples/):
+`basic_copy.rs`, `basic_move.rs`, `basic_sync.rs`, `basic_watch.rs`,
+`basic_compress.rs`. Try one directly:
+
+```sh
+cargo run --example basic_copy --features operations -- <source> <dest>
+```
+
 ## Copy
 
 ```rust

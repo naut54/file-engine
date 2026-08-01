@@ -1,7 +1,13 @@
-//! Copies a file or directory tree, printing live progress and a final
+//! Moves a file or directory tree, printing live progress and a final
 //! summary.
 //!
-//!     cargo run --example basic_copy --features operations -- <source> <dest> [--allow-integrity-risk]
+//!     cargo run --example basic_move --features operations -- <source> <dest> [--allow-integrity-risk]
+//!
+//! If `source` and `dest` are on the same filesystem, the move completes
+//! as a single atomic rename and you'll see no progress output at all —
+//! that's expected, not a hang; there's nothing to report progress on.
+//! The batching pipeline (and its progress events) only kicks in for the
+//! cross-filesystem fallback.
 
 use std::env;
 use std::time::Instant;
@@ -23,23 +29,27 @@ async fn main() -> file_engine::Result<()> {
     let (source, dest) = match (positional.next(), positional.next()) {
         (Some(source), Some(dest)) => (source, dest),
         _ => {
-            eprintln!("usage: basic_copy [--allow-integrity-risk] <source> <dest>");
+            eprintln!("usage: basic_move [--allow-integrity-risk] <source> <dest>");
             eprintln!();
             eprintln!("  --allow-integrity-risk  proceed even if the destination filesystem");
             eprintln!("                          has a known write-integrity risk on this");
-            eprintln!("                          platform (currently: exFAT on macOS)");
+            eprintln!("                          platform (currently: exFAT on macOS) —");
+            eprintln!("                          only relevant if the cross-filesystem");
+            eprintln!("                          fallback path is taken");
             std::process::exit(2);
         }
     };
 
-    println!("copying {source} -> {dest}");
-    if allow_integrity_risk {
-        println!("(proceeding despite any destination filesystem integrity risk)");
-    }
+    println!("moving {source} -> {dest}");
 
     let engine = FileEngine::new();
     let mut handle = engine
-        .copy(&source, &dest)
+        .move_path(&source, &dest)
+        // Overwrite files at the destination that already exist under
+        // the same relative path — only matters for the cross-filesystem
+        // fallback; the atomic-rename fast path replaces `dest` outright
+        // regardless of this flag, matching `std::fs::rename`'s own
+        // behavior.
         .overwrite(true)
         .allow_filesystem_integrity_risk(allow_integrity_risk)
         .start()?;
@@ -62,12 +72,10 @@ async fn main() -> file_engine::Result<()> {
             Progress::DirectoryFailed { path } => {
                 eprintln!("FAILED (creating directory): {}", path.display());
             }
-            Progress::Started { bytes_total, entries_total } => {
-                match bytes_total {
-                    Some(bytes) => println!("started: {entries_total} entries, {bytes} bytes total"),
-                    None => println!("started: {entries_total} entries"),
-                }
-            }
+            Progress::Started { bytes_total, entries_total } => match bytes_total {
+                Some(bytes) => println!("started: {entries_total} entries, {bytes} bytes total"),
+                None => println!("started: {entries_total} entries"),
+            },
             Progress::EntryStarted { .. } => {}
             Progress::EntryCompleted { .. } => {
                 completed += 1;
@@ -76,7 +84,7 @@ async fn main() -> file_engine::Result<()> {
                 }
             }
             Progress::EntryFailed { entry } => {
-                eprintln!("FAILED (during copy): {}", entry.relative_path.display());
+                eprintln!("FAILED (during move): {}", entry.relative_path.display());
             }
         }
     }
@@ -92,6 +100,10 @@ async fn main() -> file_engine::Result<()> {
         println!("  - {}: {err}", entry.relative_path.display());
     }
 
+    // Populated only if an entry copied successfully but its original
+    // source couldn't then be deleted — the move partially duplicated
+    // data instead of relocating it. Copy never populates this field;
+    // it's specific to move's deferred deletion sweep.
     if !outcome.cleanup_failed.is_empty() {
         println!("cleanup_failed: {}", outcome.cleanup_failed.len());
         for (entry, err) in &outcome.cleanup_failed {
