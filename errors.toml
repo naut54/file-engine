@@ -25,3 +25,16 @@ hint = "Pass `.format(...)` explicitly, or use a `.zip`/`.gz` extension."
 [FE_GZIP_REQUIRES_FILE]
 template = "gzip compression requires a single file, got a directory: {path}"
 hint = "Use `.format(CompressFormat::Zip)` to compress a directory."
+
+[FE_CASE_COLLISION]
+template = "filename differs only by case from another entry, which the destination filesystem cannot represent: {path} collides with {other}"
+
+[FE_FILE_TOO_LARGE_FOR_DEST]
+template = "file exceeds the destination filesystem's maximum file size: {path} ({size} bytes, max {max} bytes)"
+
+[FE_RESERVED_NAME]
+template = "filename is reserved or invalid on the destination filesystem: {path}"
+
+[FE_FILESYSTEM_INTEGRITY_RISK]
+template = "destination filesystem ({filesystem}) has a known write-integrity issue on this platform"
+hint = "Pass `.allow_filesystem_integrity_risk(true)` to proceed anyway."

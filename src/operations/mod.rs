@@ -1,36 +1,33 @@
-// `pub(crate)` so `sync.rs` (a sibling module of `operations`, not a
-// descendant) can reach `copy::copy_file`/`copy_dir`/etc. — `sync` requires
-// `operations` at the manifest level (§4), so this is always available
-// whenever `sync.rs` is compiled.
-pub(crate) mod copy;
-mod move_op;
+#[cfg(feature = "operations")]
+mod copy;
+#[cfg(feature = "sync")]
+pub(crate) mod diff;
+#[cfg(feature = "operations")]
+mod move_path;
+#[cfg(feature = "operations")]
+pub(crate) mod pipeline;
+#[cfg(feature = "sync")]
+mod sync;
+#[cfg(feature = "compress")]
+mod compress;
+#[cfg(feature = "watch")]
+mod watch;
 
-pub use copy::CopyBuilder;
-pub use move_op::MoveBuilder;
-
-use std::path::PathBuf;
-
-use crate::engine::FileEngine;
+/// Default worker pool size: `available_parallelism()`, per
+/// dev-docs/design/batching-engine.md's "Worker pool size" decision — falls
+/// back to 1 if the platform can't report it.
+#[cfg(feature = "operations")]
+pub(crate) fn default_concurrency() -> usize {
+    std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1)
+}
 
 #[cfg(feature = "operations")]
-impl FileEngine {
-    pub fn copy(&self, src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> CopyBuilder {
-        let options = self.options();
-        CopyBuilder::new(
-            src.into(),
-            dst.into(),
-            options.buffer_size,
-            options.follow_symlinks,
-        )
-    }
-
-    pub fn move_path(&self, src: impl Into<PathBuf>, dst: impl Into<PathBuf>) -> MoveBuilder {
-        let options = self.options();
-        MoveBuilder::new(
-            src.into(),
-            dst.into(),
-            options.buffer_size,
-            options.follow_symlinks,
-        )
-    }
-}
+pub use copy::CopyBuilder;
+#[cfg(feature = "operations")]
+pub use move_path::MoveBuilder;
+#[cfg(feature = "sync")]
+pub use sync::{SyncBuilder, SyncOutcome};
+#[cfg(feature = "compress")]
+pub use compress::{CompressBuilder, CompressFormat};
+#[cfg(feature = "watch")]
+pub use watch::WatchBuilder;
