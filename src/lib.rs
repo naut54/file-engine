@@ -44,6 +44,20 @@ pub use operations::MoveBuilder;
 pub use operations::{SyncBuilder, SyncOutcome};
 #[cfg(feature = "watch")]
 pub use operations::WatchBuilder;
+#[cfg(feature = "sync")]
+pub use operations::diff::DiffStrategy;
+
+// These aren't just re-exports of convenience — `ErrorStrategy`,
+// `SortOrder`, and `DiffStrategy` are parameter types on the builders'
+// public methods (`on_error`, `batch_sort_order`, `diff_strategy`), and
+// `OperationOutcome`/`StopReason`/`Entry` appear in the values those
+// builders return. Without these, callers outside this crate can't name
+// the types needed to call those methods or destructure the results,
+// even though `planner`/`profiler` mark them `pub`.
+#[cfg(feature = "operations")]
+pub use planner::{ErrorStrategy, OperationOutcome, SortOrder, StopReason};
+#[cfg(feature = "operations")]
+pub use profiler::Entry;
 
 pub struct FileEngine;
 
