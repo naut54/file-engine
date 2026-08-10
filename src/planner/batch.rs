@@ -46,7 +46,7 @@ pub(crate) fn pack(mut entries: Vec<Entry>, config: &BatchConfig) -> Vec<Batch> 
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use super::*;
 
@@ -188,11 +188,7 @@ mod tests {
 
         let oversized_batch = batches
             .iter()
-            .find(|b| {
-                b.entries
-                    .iter()
-                    .any(|e| e.path == PathBuf::from("oversized"))
-            })
+            .find(|b| b.entries.iter().any(|e| e.path == Path::new("oversized")))
             .expect("oversized entry should be in some batch");
         assert_eq!(oversized_batch.entries.len(), 1);
         assert_eq!(oversized_batch.total_bytes, 10_000);

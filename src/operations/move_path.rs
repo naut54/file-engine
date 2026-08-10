@@ -133,19 +133,22 @@ impl Renamer for TokioRenamer {
 }
 
 /// 1. Attempt a single atomic rename, deferring entirely to the OS's
-/// native rename semantics — no synthesized top-level overwrite check
-/// here, since for a directory move `dest` legitimately pre-exists as the
-/// directory being moved *into* (matching `CopyAction`'s
-/// `dest_root.join(relative_path)` placement, which mirrors contents into
-/// an existing directory rather than nesting a new one under it); a
-/// pre-check for "dest exists" would reject that normal case. Per-file
-/// overwrite conflicts are still caught correctly, just per-entry, by
-/// `CopyAction` in the fallback path below. 2. On cross-device failure,
-/// fall back to `pipeline::run_copy_pipeline` (unmodified — no dedicated
-/// `EntryAction` for move). 3. Any other rename error surfaces directly.
+///    native rename semantics — no synthesized top-level overwrite check
+///    here, since for a directory move `dest` legitimately pre-exists as
+///    the directory being moved *into* (matching `CopyAction`'s
+///    `dest_root.join(relative_path)` placement, which mirrors contents
+///    into an existing directory rather than nesting a new one under
+///    it); a pre-check for "dest exists" would reject that normal case.
+///    Per-file overwrite conflicts are still caught correctly, just
+///    per-entry, by `CopyAction` in the fallback path below.
+/// 2. On cross-device failure, fall back to
+///    `pipeline::run_copy_pipeline` (unmodified — no dedicated
+///    `EntryAction` for move).
+/// 3. Any other rename error surfaces directly.
 /// 4. Once the copy phase resolves, run the deferred deletion sweep over
-/// `succeeded`, governed by the same `ErrorStrategy`. See
-/// dev-docs/design/batching-engine.md, "Move".
+///    `succeeded`, governed by the same `ErrorStrategy`.
+///
+/// See dev-docs/design/batching-engine.md, "Move".
 #[allow(clippy::too_many_arguments)]
 async fn move_path<R: Renamer>(
     source: &Path,
@@ -480,8 +483,10 @@ mod tests {
         let entry_a = entry(a.clone(), PathBuf::from("locked/a.txt"), 1);
         let entry_b = entry(b.clone(), PathBuf::from("b.txt"), 1);
 
-        let mut outcome = OperationOutcome::default();
-        outcome.succeeded = vec![entry_a.clone(), entry_b.clone()];
+        let mut outcome = OperationOutcome {
+            succeeded: vec![entry_a.clone(), entry_b.clone()],
+            ..OperationOutcome::default()
+        };
 
         // unlink needs write+execute on the containing directory, so
         // locking it down makes deleting `a` fail with permission denied.
@@ -530,8 +535,10 @@ mod tests {
         let entry_b = entry(b.clone(), PathBuf::from("b.txt"), 1);
         let entry_c = entry(c.clone(), PathBuf::from("c.txt"), 1);
 
-        let mut outcome = OperationOutcome::default();
-        outcome.succeeded = vec![entry_a, entry_b, entry_c];
+        let mut outcome = OperationOutcome {
+            succeeded: vec![entry_a, entry_b, entry_c],
+            ..OperationOutcome::default()
+        };
 
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o555)).unwrap();
         sweep(
@@ -580,8 +587,10 @@ mod tests {
 
         // b first (its deletion succeeds), then a (its deletion fails and
         // triggers rollback of everything, including b).
-        let mut outcome = OperationOutcome::default();
-        outcome.succeeded = vec![entry_b, entry_a];
+        let mut outcome = OperationOutcome {
+            succeeded: vec![entry_b, entry_a],
+            ..OperationOutcome::default()
+        };
 
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o555)).unwrap();
         sweep(

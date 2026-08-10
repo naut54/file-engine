@@ -68,7 +68,7 @@ fn median_size(entries: &[Entry]) -> u64 {
     sizes.sort_unstable();
 
     let mid = sizes.len() / 2;
-    if sizes.len() % 2 == 0 {
+    if sizes.len().is_multiple_of(2) {
         (sizes[mid - 1] + sizes[mid]) / 2
     } else {
         sizes[mid]

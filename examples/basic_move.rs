@@ -65,7 +65,7 @@ async fn main() -> file_engine::Result<()> {
             }
             Progress::DirectoryCompleted { .. } => {
                 dirs_completed += 1;
-                if dirs_completed % 500 == 0 {
+                if dirs_completed.is_multiple_of(500) {
                     println!(
                         "...{dirs_completed} directories done ({:?} elapsed)",
                         start.elapsed()
@@ -85,7 +85,7 @@ async fn main() -> file_engine::Result<()> {
             Progress::EntryStarted { .. } => {}
             Progress::EntryCompleted { .. } => {
                 completed += 1;
-                if completed % 200 == 0 {
+                if completed.is_multiple_of(200) {
                     println!(
                         "...{completed} entries done ({:?} elapsed)",
                         start.elapsed()

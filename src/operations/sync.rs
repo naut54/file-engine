@@ -127,10 +127,12 @@ impl SyncBuilder {
     }
 }
 
-/// 1. Diff `source` against `dest`. 2. Run `to_copy` through
-/// `pipeline::run_workload_pipeline` (skips re-scanning — `diff` already
-/// produced the entry list). 3. If the copy phase completed without
-/// stopping early, delete every `to_delete` entry (dest-only orphans).
+/// 1. Diff `source` against `dest`.
+/// 2. Run `to_copy` through `pipeline::run_workload_pipeline` (skips
+///    re-scanning — `diff` already produced the entry list).
+/// 3. If the copy phase completed without stopping early, delete every
+///    `to_delete` entry (dest-only orphans).
+///
 /// See dev-docs/design/batching-engine.md, "sync.rs and diff.rs".
 ///
 /// The copy-phase gate is a judgment call the design doc didn't spell
@@ -384,8 +386,10 @@ mod tests {
         fs::create_dir(dest.path().join("a.txt")).unwrap(); // forces a copy failure
         fs::write(dest.path().join("orphan.txt"), b"stale").unwrap();
 
-        let mut config = BatchConfig::default();
-        config.error_strategy = ErrorStrategy::AbortOnError;
+        let config = BatchConfig {
+            error_strategy: ErrorStrategy::AbortOnError,
+            ..BatchConfig::default()
+        };
 
         let outcome = sync(
             source.path(),

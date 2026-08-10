@@ -414,8 +414,10 @@ mod tests {
         )
         .unwrap();
 
-        let mut config = BatchConfig::default();
-        config.max_bytes_per_batch = 1024;
+        let config = BatchConfig {
+            max_bytes_per_batch: 1024,
+            ..BatchConfig::default()
+        };
 
         let outcome = run_copy_pipeline(
             src_dir.path(),
@@ -578,8 +580,10 @@ mod tests {
         // the file needs to go.
         fs::create_dir(dest_dir.path().join("b.txt")).unwrap();
 
-        let mut config = BatchConfig::default();
-        config.error_strategy = ErrorStrategy::AbortOnError;
+        let config = BatchConfig {
+            error_strategy: ErrorStrategy::AbortOnError,
+            ..BatchConfig::default()
+        };
 
         let outcome = run_copy_pipeline(
             src_dir.path(),

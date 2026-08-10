@@ -114,6 +114,10 @@ fn infer_format(dest: &Path) -> Result<CompressFormat> {
 /// relative to the disk I/O this design already parallelizes, so the
 /// practical benefit lost is small; what's preserved is the actual
 /// motivating concern — parallel reads instead of one file at a time.
+// Matches `run_copy_pipeline`/`move_path`/`sync`: these pipeline entry
+// points thread the same builder options through, and grouping them into
+// a struct purely to satisfy the lint would add a type with no other use.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn compress(
     source: &Path,
     dest: &Path,
@@ -683,8 +687,10 @@ mod tests {
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
         fs::write(src_dir.path().join("b.txt"), b"b").unwrap();
 
-        let mut config = BatchConfig::default();
-        config.error_strategy = ErrorStrategy::AbortOnError;
+        let config = BatchConfig {
+            error_strategy: ErrorStrategy::AbortOnError,
+            ..BatchConfig::default()
+        };
 
         let outcome = compress(
             src_dir.path(),
@@ -719,8 +725,10 @@ mod tests {
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
         fs::write(src_dir.path().join("b.txt"), b"b").unwrap();
 
-        let mut config = BatchConfig::default();
-        config.error_strategy = ErrorStrategy::Undo;
+        let config = BatchConfig {
+            error_strategy: ErrorStrategy::Undo,
+            ..BatchConfig::default()
+        };
 
         let outcome = compress(
             src_dir.path(),
@@ -758,8 +766,10 @@ mod tests {
             fs::write(src_dir.path().join(format!("f{i}.txt")), format!("data{i}")).unwrap();
         }
 
-        let mut config = BatchConfig::default();
-        config.max_files_per_batch = Some(1);
+        let config = BatchConfig {
+            max_files_per_batch: Some(1),
+            ..BatchConfig::default()
+        };
 
         let outcome = compress(
             src_dir.path(),
@@ -829,8 +839,10 @@ mod tests {
 
         fs::write(src_dir.path().join("a.txt"), b"a").unwrap();
 
-        let mut config = BatchConfig::default();
-        config.error_strategy = ErrorStrategy::AbortOnError;
+        let config = BatchConfig {
+            error_strategy: ErrorStrategy::AbortOnError,
+            ..BatchConfig::default()
+        };
 
         let cancel = CancellationToken::new();
         cancel.cancel();

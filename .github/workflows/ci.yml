@@ -10,14 +10,25 @@ env:
   # Every feature except `permissions`, which is Unix-only (§9.6) — its
   # `nix` dependency doesn't exist for non-Unix targets.
   WINDOWS_FEATURES: operations,analyze,checksum,watch,compress,sync,diagnostics
+  # `fmt` and `clippy` are pinned rather than tracking `stable`, because
+  # both gate on tool *output* that legitimately changes between Rust
+  # releases: clippy adds lints and rustfmt adjusts its layout rules, so
+  # a floating toolchain turns every release into a spontaneously red CI
+  # run on code nobody touched (which is exactly how this pin came to be
+  # — a batch of style lints landed on an untouched crate). `test` and
+  # `feature-matrix` deliberately stay on `stable`: they gate on the code
+  # compiling and behaving, which is precisely what should be re-checked
+  # against each new release. Bump this deliberately, in its own commit.
+  LINT_TOOLCHAIN: "1.96"
 
 jobs:
   fmt:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.LINT_TOOLCHAIN }}
           components: rustfmt
       - run: cargo fmt --all -- --check
 
@@ -29,8 +40,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ env.LINT_TOOLCHAIN }}
           components: clippy
       - name: clippy (all features valid for this OS)
         shell: bash

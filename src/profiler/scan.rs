@@ -220,7 +220,7 @@ mod tests {
         let nested = workload
             .directories
             .iter()
-            .find(|d| d.relative_path == PathBuf::from("nested"))
+            .find(|d| d.relative_path == Path::new("nested"))
             .expect("nested directory should have been captured");
         // Masked to the permission bits: `mode()` can also report
         // file-type bits mixed in on some platforms.
