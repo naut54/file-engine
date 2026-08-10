@@ -1,0 +1,9 @@
+# Revisions whose changes are purely mechanical and should be skipped by
+# `git blame`, so that line attribution points at the commit that last
+# changed a line's meaning rather than the one that reflowed it.
+#
+# GitHub applies this file automatically. To get the same locally:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+
+# Apply rustfmt across the crate with default settings
+2d509d18d6c4f02d192d2d66aa13d8e3f677ca4b
