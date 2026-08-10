@@ -77,6 +77,27 @@ fn build_watcher(
     tx: mpsc::UnboundedSender<WatchEvent>,
     fatal_tx: oneshot::Sender<Error>,
 ) -> Result<RecommendedWatcher> {
+    // Checked here rather than left to `notify` to report: its backends
+    // disagree about what watching a missing path produces. The
+    // inotify/FSEvents ones surface `PathNotFound` or `Io(NotFound)`,
+    // which `classify_notify_error` maps, but the Windows
+    // `ReadDirectoryChangesW` backend produced neither — so
+    // `Error::SourceNotFound`, part of this builder's documented
+    // contract, simply never happened there. Deciding it up front makes
+    // the contract identical on every platform instead of inheriting
+    // whichever backend `notify` selected.
+    //
+    // `metadata()` rather than `exists()`: the latter collapses "not
+    // there" and "can't look" into one answer, which would report a
+    // permission problem as `SourceNotFound`.
+    //
+    // This leaves a window where the path disappears between here and
+    // `watch()` below — that path still ends up an `Err`, just
+    // classified by `notify`, which is the same outcome as before.
+    if let Err(err) = std::fs::metadata(path) {
+        return Err(classify_io_error(err, path));
+    }
+
     let fatal_tx = Arc::new(Mutex::new(Some(fatal_tx)));
     let path_for_errors = path.to_path_buf();
 
@@ -114,21 +135,28 @@ fn classify_notify_error(err: notify::Error, path: &Path) -> Error {
         notify::ErrorKind::PathNotFound => Error::SourceNotFound {
             path: path.to_path_buf(),
         },
-        notify::ErrorKind::Io(io_err) => match io_err.kind() {
-            std::io::ErrorKind::NotFound => Error::SourceNotFound {
-                path: path.to_path_buf(),
-            },
-            std::io::ErrorKind::PermissionDenied => Error::PermissionDenied {
-                path: path.to_path_buf(),
-            },
-            _ => Error::Io {
-                path: path.to_path_buf(),
-                source: io_err,
-            },
-        },
+        notify::ErrorKind::Io(io_err) => classify_io_error(io_err, path),
         _ => Error::Io {
             path: path.to_path_buf(),
             source: std::io::Error::other(err.to_string()),
+        },
+    }
+}
+
+/// Shared by the pre-flight `metadata()` check and
+/// `classify_notify_error`'s `Io` arm, so a missing or unreadable path
+/// produces the same `Error` whichever of the two noticed it first.
+fn classify_io_error(err: std::io::Error, path: &Path) -> Error {
+    match err.kind() {
+        std::io::ErrorKind::NotFound => Error::SourceNotFound {
+            path: path.to_path_buf(),
+        },
+        std::io::ErrorKind::PermissionDenied => Error::PermissionDenied {
+            path: path.to_path_buf(),
+        },
+        _ => Error::Io {
+            path: path.to_path_buf(),
+            source: err,
         },
     }
 }
@@ -372,5 +400,38 @@ mod tests {
         let result = handle.await;
 
         assert!(matches!(result, Err(Error::SourceNotFound { .. })));
+    }
+
+    /// Covers why the pre-flight check calls `metadata()` rather than
+    /// `exists()`: the path is genuinely there, it just can't be looked
+    /// at, and `exists()` reports that identically to "not there" — so
+    /// this case would surface as `SourceNotFound`, sending a caller
+    /// looking for a typo instead of a permission problem.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn watching_an_unreadable_path_resolves_to_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let locked = dir.path().join("locked");
+        fs::create_dir(&locked).unwrap();
+        let inner = locked.join("inner");
+        fs::create_dir(&inner).unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+        // Root ignores mode bits, so there'd be no permission error to
+        // observe — skip instead of asserting something untrue of that
+        // user. Restore the mode first so `TempDir` can still clean up.
+        if fs::metadata(&inner).is_ok() {
+            fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+            eprintln!("skipped: running as a user that bypasses directory permissions");
+            return;
+        }
+
+        let result = WatchBuilder::new(&inner).start().unwrap().await;
+
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+
+        assert!(matches!(result, Err(Error::PermissionDenied { .. })));
     }
 }
