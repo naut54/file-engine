@@ -647,12 +647,22 @@ mod tests {
         assert_eq!(real_mode, 0o700);
     }
 
-    // The two tests below rely on this dev/CI machine's default temp
-    // volume being case-insensitive (true for the default macOS boot
-    // volume — empirically confirmed via `pathconf(_PC_CASE_SENSITIVE)`
-    // while building `fs_caps`) to exercise the real `probe()` ->
-    // `validate()` -> `ErrorStrategy` wiring end-to-end, not a mocked
-    // capability.
+    // The two tests below exercise the real `probe()` -> `validate()` ->
+    // `ErrorStrategy` wiring end-to-end rather than a mocked capability,
+    // which means they need a destination volume that genuinely is
+    // case-insensitive — with a case-sensitive one there is no collision
+    // to detect, and the assertions describe something that legitimately
+    // never happened. That holds for the default macOS boot volume
+    // (empirically confirmed via `pathconf(_PC_CASE_SENSITIVE)` while
+    // building `fs_caps`) but not for Linux's ext4/tmpfs, so each probes
+    // the destination first and skips when it can't host the scenario.
+    //
+    // Skipping is deliberate over mocking the capability: a mocked
+    // `FilesystemCapabilities` would run everywhere while testing
+    // strictly less — it would no longer prove that a real `probe()`
+    // reports case-insensitivity in a form `validate()` acts on, which
+    // is the only part of this that isn't already covered by
+    // `validate.rs`'s unit tests.
     //
     // Built as a hand-constructed `Workload` fed straight to
     // `run_workload_pipeline`, bypassing `scan()`, rather than two real
@@ -706,6 +716,13 @@ mod tests {
         };
 
         let dest_caps = probe_fs_caps(dest_dir.path()).await.unwrap();
+        if dest_caps.case_sensitive {
+            eprintln!(
+                "skipped: destination volume is case-sensitive, so there is no case collision to detect"
+            );
+            return;
+        }
+
         let outcome = run_workload_pipeline(
             workload,
             dest_dir.path(),
@@ -780,6 +797,13 @@ mod tests {
         };
 
         let dest_caps = probe_fs_caps(dest_dir.path()).await.unwrap();
+        if dest_caps.case_sensitive {
+            eprintln!(
+                "skipped: destination volume is case-sensitive, so there is no case collision to detect"
+            );
+            return;
+        }
+
         let outcome = run_workload_pipeline(
             workload,
             dest_dir.path(),
