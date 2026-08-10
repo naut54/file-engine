@@ -40,7 +40,9 @@ pub(crate) fn validate(
     allow_filesystem_integrity_risk: bool,
 ) -> Result<ValidationOutcome> {
     if dest_caps.write_integrity_risk && !allow_filesystem_integrity_risk {
-        return Err(Error::FilesystemIntegrityRisk { filesystem: dest_caps.name.clone() });
+        return Err(Error::FilesystemIntegrityRisk {
+            filesystem: dest_caps.name.clone(),
+        });
     }
 
     let mut outcome = ValidationOutcome::default();
@@ -49,9 +51,21 @@ pub(crate) fn validate(
         reject_case_collisions(workload, &mut outcome);
     }
 
-    retain_entries(&mut workload.small, dest_caps, &mut outcome.rejected_entries);
-    retain_entries(&mut workload.large, dest_caps, &mut outcome.rejected_entries);
-    retain_directories(&mut workload.directories, dest_caps, &mut outcome.rejected_directories);
+    retain_entries(
+        &mut workload.small,
+        dest_caps,
+        &mut outcome.rejected_entries,
+    );
+    retain_entries(
+        &mut workload.large,
+        dest_caps,
+        &mut outcome.rejected_entries,
+    );
+    retain_directories(
+        &mut workload.directories,
+        dest_caps,
+        &mut outcome.rejected_directories,
+    );
 
     Ok(outcome)
 }
@@ -62,7 +76,9 @@ pub(crate) fn validate(
 /// detection here the same way it wouldn't dodge exFAT's real
 /// case-insensitive lookup.
 fn collision_key(relative_path: &Path) -> String {
-    normalize_for_comparison(relative_path).to_string_lossy().to_lowercase()
+    normalize_for_comparison(relative_path)
+        .to_string_lossy()
+        .to_lowercase()
 }
 
 /// Groups every file *and* directory by `collision_key` — a file and a
@@ -75,14 +91,23 @@ fn collision_key(relative_path: &Path) -> String {
 fn reject_case_collisions(workload: &mut Workload, outcome: &mut ValidationOutcome) {
     let mut groups: HashMap<String, Vec<PathBuf>> = HashMap::new();
     for entry in workload.small.iter().chain(&workload.large) {
-        groups.entry(collision_key(&entry.relative_path)).or_default().push(entry.relative_path.clone());
+        groups
+            .entry(collision_key(&entry.relative_path))
+            .or_default()
+            .push(entry.relative_path.clone());
     }
     for dir in &workload.directories {
-        groups.entry(collision_key(&dir.relative_path)).or_default().push(dir.relative_path.clone());
+        groups
+            .entry(collision_key(&dir.relative_path))
+            .or_default()
+            .push(dir.relative_path.clone());
     }
 
-    let colliding_keys: HashSet<String> =
-        groups.into_iter().filter(|(_, paths)| paths.len() > 1).map(|(key, _)| key).collect();
+    let colliding_keys: HashSet<String> = groups
+        .into_iter()
+        .filter(|(_, paths)| paths.len() > 1)
+        .map(|(key, _)| key)
+        .collect();
     if colliding_keys.is_empty() {
         return;
     }
@@ -94,13 +119,19 @@ fn reject_case_collisions(workload: &mut Workload, outcome: &mut ValidationOutco
     for entry in workload.small.iter().chain(&workload.large) {
         let key = collision_key(&entry.relative_path);
         if colliding_keys.contains(&key) {
-            siblings.entry(key).or_default().push(entry.relative_path.clone());
+            siblings
+                .entry(key)
+                .or_default()
+                .push(entry.relative_path.clone());
         }
     }
     for dir in &workload.directories {
         let key = collision_key(&dir.relative_path);
         if colliding_keys.contains(&key) {
-            siblings.entry(key).or_default().push(dir.relative_path.clone());
+            siblings
+                .entry(key)
+                .or_default()
+                .push(dir.relative_path.clone());
         }
     }
     let other_for = |path: &Path, key: &str| -> PathBuf {
@@ -118,7 +149,10 @@ fn reject_case_collisions(workload: &mut Workload, outcome: &mut ValidationOutco
             if colliding_keys.contains(&key) {
                 let entry = group.remove(i);
                 let other = other_for(&entry.relative_path, &key);
-                let error = Error::CaseCollision { path: entry.relative_path.clone(), other };
+                let error = Error::CaseCollision {
+                    path: entry.relative_path.clone(),
+                    other,
+                };
                 outcome.rejected_entries.push((entry, error));
             } else {
                 i += 1;
@@ -132,7 +166,10 @@ fn reject_case_collisions(workload: &mut Workload, outcome: &mut ValidationOutco
         if colliding_keys.contains(&key) {
             let dir = workload.directories.remove(i);
             let other = other_for(&dir.relative_path, &key);
-            let error = Error::CaseCollision { path: dir.relative_path.clone(), other };
+            let error = Error::CaseCollision {
+                path: dir.relative_path.clone(),
+                other,
+            };
             outcome.rejected_directories.push((dir, error));
         } else {
             i += 1;
@@ -140,7 +177,11 @@ fn reject_case_collisions(workload: &mut Workload, outcome: &mut ValidationOutco
     }
 }
 
-fn retain_entries(entries: &mut Vec<Entry>, dest_caps: &FilesystemCapabilities, rejected: &mut Vec<(Entry, Error)>) {
+fn retain_entries(
+    entries: &mut Vec<Entry>,
+    dest_caps: &FilesystemCapabilities,
+    rejected: &mut Vec<(Entry, Error)>,
+) {
     let mut i = 0;
     while i < entries.len() {
         match entry_violation(&entries[i], dest_caps) {
@@ -153,7 +194,11 @@ fn retain_entries(entries: &mut Vec<Entry>, dest_caps: &FilesystemCapabilities, 
 fn entry_violation(entry: &Entry, dest_caps: &FilesystemCapabilities) -> Option<Error> {
     if let Some(max) = dest_caps.max_file_size {
         if entry.size > max {
-            return Some(Error::FileTooLargeForDest { path: entry.relative_path.clone(), size: entry.size, max });
+            return Some(Error::FileTooLargeForDest {
+                path: entry.relative_path.clone(),
+                size: entry.size,
+                max,
+            });
         }
     }
     if dest_caps.windows_naming_rules {
@@ -198,22 +243,30 @@ fn retain_directories(
 /// dev-docs/design/filesystem-detection.md.
 const RESERVED_CHARS: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 const RESERVED_BASE_NAMES: &[&str] = &[
-    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9", "LPT1",
-    "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+    "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
 ];
 
 fn check_windows_naming(relative_path: &Path) -> Option<Error> {
     for component in relative_path.components() {
-        let std::path::Component::Normal(os_str) = component else { continue };
+        let std::path::Component::Normal(os_str) = component else {
+            continue;
+        };
         let name = os_str.to_string_lossy();
 
-        let has_reserved_char = name.chars().any(|c| RESERVED_CHARS.contains(&c) || (c as u32) < 0x20);
+        let has_reserved_char = name
+            .chars()
+            .any(|c| RESERVED_CHARS.contains(&c) || (c as u32) < 0x20);
         let has_trailing_dot_or_space = name.ends_with('.') || name.ends_with(' ');
         let base = name.split('.').next().unwrap_or(&name);
-        let is_reserved_name = RESERVED_BASE_NAMES.iter().any(|reserved| reserved.eq_ignore_ascii_case(base));
+        let is_reserved_name = RESERVED_BASE_NAMES
+            .iter()
+            .any(|reserved| reserved.eq_ignore_ascii_case(base));
 
         if has_reserved_char || has_trailing_dot_or_space || is_reserved_name {
-            return Some(Error::ReservedName { path: relative_path.to_path_buf() });
+            return Some(Error::ReservedName {
+                path: relative_path.to_path_buf(),
+            });
         }
     }
     None
@@ -239,11 +292,20 @@ mod tests {
     }
 
     fn entry(relative_path: &str, size: u64) -> Entry {
-        Entry { path: PathBuf::from(relative_path), relative_path: PathBuf::from(relative_path), size, modified: None }
+        Entry {
+            path: PathBuf::from(relative_path),
+            relative_path: PathBuf::from(relative_path),
+            size,
+            modified: None,
+        }
     }
 
     fn dir(relative_path: &str) -> DirEntry {
-        DirEntry { path: PathBuf::from(relative_path), relative_path: PathBuf::from(relative_path), mode: None }
+        DirEntry {
+            path: PathBuf::from(relative_path),
+            relative_path: PathBuf::from(relative_path),
+            mode: None,
+        }
     }
 
     #[test]
@@ -266,7 +328,11 @@ mod tests {
 
     #[test]
     fn write_integrity_risk_returns_err_before_touching_the_workload() {
-        let mut workload = Workload { small: vec![entry("a.txt", 10)], large: vec![], directories: vec![] };
+        let mut workload = Workload {
+            small: vec![entry("a.txt", 10)],
+            large: vec![],
+            directories: vec![],
+        };
         let dest_caps = caps(|c| {
             c.name = "exfat".to_string();
             c.write_integrity_risk = true;
@@ -274,13 +340,23 @@ mod tests {
 
         let result = validate(&mut workload, &dest_caps, false);
 
-        assert!(matches!(result, Err(Error::FilesystemIntegrityRisk { filesystem }) if filesystem == "exfat"));
-        assert_eq!(workload.small.len(), 1, "workload must be untouched when this short-circuits");
+        assert!(
+            matches!(result, Err(Error::FilesystemIntegrityRisk { filesystem }) if filesystem == "exfat")
+        );
+        assert_eq!(
+            workload.small.len(),
+            1,
+            "workload must be untouched when this short-circuits"
+        );
     }
 
     #[test]
     fn allow_filesystem_integrity_risk_bypasses_the_check() {
-        let mut workload = Workload { small: vec![entry("a.txt", 10)], large: vec![], directories: vec![] };
+        let mut workload = Workload {
+            small: vec![entry("a.txt", 10)],
+            large: vec![],
+            directories: vec![],
+        };
         let dest_caps = caps(|c| {
             c.name = "exfat".to_string();
             c.write_integrity_risk = true;
@@ -289,7 +365,11 @@ mod tests {
         let outcome = validate(&mut workload, &dest_caps, true).unwrap();
 
         assert!(outcome.rejected_entries.is_empty());
-        assert_eq!(workload.small.len(), 1, "the entry should proceed normally once the risk is acknowledged");
+        assert_eq!(
+            workload.small.len(),
+            1,
+            "the entry should proceed normally once the risk is acknowledged"
+        );
     }
 
     #[test]
@@ -318,7 +398,10 @@ mod tests {
 
         let outcome = validate(&mut workload, &dest_caps, false).unwrap();
 
-        assert!(workload.small.is_empty(), "both colliding entries should be removed, not just one");
+        assert!(
+            workload.small.is_empty(),
+            "both colliding entries should be removed, not just one"
+        );
         assert_eq!(outcome.rejected_entries.len(), 2);
         for (_, err) in &outcome.rejected_entries {
             assert!(matches!(err, Error::CaseCollision { .. }));
@@ -350,9 +433,17 @@ mod tests {
 
         let nfc: String = "café.txt".nfc().collect();
         let nfd: String = "café.txt".nfd().collect();
-        assert_ne!(nfc.as_bytes(), nfd.as_bytes(), "test setup: these must start out byte-different");
+        assert_ne!(
+            nfc.as_bytes(),
+            nfd.as_bytes(),
+            "test setup: these must start out byte-different"
+        );
 
-        let mut workload = Workload { small: vec![entry(&nfc, 1), entry(&nfd, 1)], large: vec![], directories: vec![] };
+        let mut workload = Workload {
+            small: vec![entry(&nfc, 1), entry(&nfd, 1)],
+            large: vec![],
+            directories: vec![],
+        };
         let dest_caps = caps(|c| c.case_sensitive = false);
 
         let outcome = validate(&mut workload, &dest_caps, false).unwrap();
@@ -364,7 +455,11 @@ mod tests {
     #[test]
     fn non_colliding_entries_survive_alongside_a_collision() {
         let mut workload = Workload {
-            small: vec![entry("Report.txt", 1), entry("report.txt", 1), entry("unrelated.txt", 1)],
+            small: vec![
+                entry("Report.txt", 1),
+                entry("report.txt", 1),
+                entry("unrelated.txt", 1),
+            ],
             large: vec![],
             directories: vec![],
         };
@@ -374,12 +469,19 @@ mod tests {
 
         assert_eq!(outcome.rejected_entries.len(), 2);
         assert_eq!(workload.small.len(), 1);
-        assert_eq!(workload.small[0].relative_path, PathBuf::from("unrelated.txt"));
+        assert_eq!(
+            workload.small[0].relative_path,
+            PathBuf::from("unrelated.txt")
+        );
     }
 
     #[test]
     fn file_over_the_size_limit_is_rejected() {
-        let mut workload = Workload { small: vec![], large: vec![entry("big.bin", 101)], directories: vec![] };
+        let mut workload = Workload {
+            small: vec![],
+            large: vec![entry("big.bin", 101)],
+            directories: vec![],
+        };
         let dest_caps = caps(|c| c.max_file_size = Some(100));
 
         let outcome = validate(&mut workload, &dest_caps, false).unwrap();
@@ -388,13 +490,21 @@ mod tests {
         assert_eq!(outcome.rejected_entries.len(), 1);
         assert!(matches!(
             outcome.rejected_entries[0].1,
-            Error::FileTooLargeForDest { size: 101, max: 100, .. }
+            Error::FileTooLargeForDest {
+                size: 101,
+                max: 100,
+                ..
+            }
         ));
     }
 
     #[test]
     fn file_exactly_at_the_size_limit_is_kept() {
-        let mut workload = Workload { small: vec![], large: vec![entry("big.bin", 100)], directories: vec![] };
+        let mut workload = Workload {
+            small: vec![],
+            large: vec![entry("big.bin", 100)],
+            directories: vec![],
+        };
         let dest_caps = caps(|c| c.max_file_size = Some(100));
 
         let outcome = validate(&mut workload, &dest_caps, false).unwrap();
@@ -405,7 +515,11 @@ mod tests {
 
     #[test]
     fn no_size_limit_never_rejects_on_size() {
-        let mut workload = Workload { small: vec![], large: vec![entry("huge.bin", u64::MAX)], directories: vec![] };
+        let mut workload = Workload {
+            small: vec![],
+            large: vec![entry("huge.bin", u64::MAX)],
+            directories: vec![],
+        };
         let dest_caps = caps(|c| c.max_file_size = None);
 
         let outcome = validate(&mut workload, &dest_caps, false).unwrap();
@@ -415,18 +529,29 @@ mod tests {
 
     #[test]
     fn reserved_character_in_a_filename_is_rejected_when_windows_naming_rules_apply() {
-        let mut workload = Workload { small: vec![entry("a:b.txt", 1)], large: vec![], directories: vec![] };
+        let mut workload = Workload {
+            small: vec![entry("a:b.txt", 1)],
+            large: vec![],
+            directories: vec![],
+        };
         let dest_caps = caps(|c| c.windows_naming_rules = true);
 
         let outcome = validate(&mut workload, &dest_caps, false).unwrap();
 
         assert!(workload.small.is_empty());
-        assert!(matches!(outcome.rejected_entries[0].1, Error::ReservedName { .. }));
+        assert!(matches!(
+            outcome.rejected_entries[0].1,
+            Error::ReservedName { .. }
+        ));
     }
 
     #[test]
     fn reserved_characters_are_allowed_when_windows_naming_rules_do_not_apply() {
-        let mut workload = Workload { small: vec![entry("a:b.txt", 1)], large: vec![], directories: vec![] };
+        let mut workload = Workload {
+            small: vec![entry("a:b.txt", 1)],
+            large: vec![],
+            directories: vec![],
+        };
         let dest_caps = caps(|c| c.windows_naming_rules = false);
 
         let outcome = validate(&mut workload, &dest_caps, false).unwrap();
@@ -438,17 +563,33 @@ mod tests {
     #[test]
     fn reserved_device_name_is_rejected_case_insensitively_regardless_of_extension() {
         let dest_caps = caps(|c| c.windows_naming_rules = true);
-        for name in ["CON", "con.txt", "NUL", "nul.log", "COM1", "com1.dat", "AUX"] {
-            let mut workload = Workload { small: vec![entry(name, 1)], large: vec![], directories: vec![] };
+        for name in [
+            "CON", "con.txt", "NUL", "nul.log", "COM1", "com1.dat", "AUX",
+        ] {
+            let mut workload = Workload {
+                small: vec![entry(name, 1)],
+                large: vec![],
+                directories: vec![],
+            };
             let outcome = validate(&mut workload, &dest_caps, false).unwrap();
-            assert!(workload.small.is_empty(), "{name} should have been rejected");
-            assert!(matches!(outcome.rejected_entries[0].1, Error::ReservedName { .. }));
+            assert!(
+                workload.small.is_empty(),
+                "{name} should have been rejected"
+            );
+            assert!(matches!(
+                outcome.rejected_entries[0].1,
+                Error::ReservedName { .. }
+            ));
         }
     }
 
     #[test]
     fn a_name_that_merely_contains_a_reserved_word_is_not_rejected() {
-        let mut workload = Workload { small: vec![entry("console.txt", 1)], large: vec![], directories: vec![] };
+        let mut workload = Workload {
+            small: vec![entry("console.txt", 1)],
+            large: vec![],
+            directories: vec![],
+        };
         let dest_caps = caps(|c| c.windows_naming_rules = true);
 
         let outcome = validate(&mut workload, &dest_caps, false).unwrap();
@@ -460,27 +601,48 @@ mod tests {
     fn trailing_dot_or_space_is_rejected() {
         let dest_caps = caps(|c| c.windows_naming_rules = true);
         for name in ["trailing.", "trailing "] {
-            let mut workload = Workload { small: vec![entry(name, 1)], large: vec![], directories: vec![] };
+            let mut workload = Workload {
+                small: vec![entry(name, 1)],
+                large: vec![],
+                directories: vec![],
+            };
             let outcome = validate(&mut workload, &dest_caps, false).unwrap();
-            assert!(workload.small.is_empty(), "{name:?} should have been rejected");
-            assert!(matches!(outcome.rejected_entries[0].1, Error::ReservedName { .. }));
+            assert!(
+                workload.small.is_empty(),
+                "{name:?} should have been rejected"
+            );
+            assert!(matches!(
+                outcome.rejected_entries[0].1,
+                Error::ReservedName { .. }
+            ));
         }
     }
 
     #[test]
     fn reserved_directory_name_is_rejected() {
-        let mut workload = Workload { small: vec![], large: vec![], directories: vec![dir("CON")] };
+        let mut workload = Workload {
+            small: vec![],
+            large: vec![],
+            directories: vec![dir("CON")],
+        };
         let dest_caps = caps(|c| c.windows_naming_rules = true);
 
         let outcome = validate(&mut workload, &dest_caps, false).unwrap();
 
         assert!(workload.directories.is_empty());
-        assert!(matches!(outcome.rejected_directories[0].1, Error::ReservedName { .. }));
+        assert!(matches!(
+            outcome.rejected_directories[0].1,
+            Error::ReservedName { .. }
+        ));
     }
 
     #[test]
     fn the_scanned_root_with_empty_relative_path_is_never_rejected() {
-        let mut workload = Workload { small: vec![], large: vec![], directories: vec![dir("")] };
+        let mut workload = Workload {
+            small: vec![],
+            large: vec![],
+            directories: vec![dir("")],
+        };
         let dest_caps = caps(|c| c.windows_naming_rules = true);
 
         let outcome = validate(&mut workload, &dest_caps, false).unwrap();

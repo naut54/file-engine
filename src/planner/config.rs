@@ -139,6 +139,9 @@ mod tests {
 
     #[test]
     fn error_strategy_defaults_to_continue_and_collect() {
-        assert_eq!(BatchConfig::default().error_strategy, ErrorStrategy::ContinueAndCollect);
+        assert_eq!(
+            BatchConfig::default().error_strategy,
+            ErrorStrategy::ContinueAndCollect
+        );
     }
 }

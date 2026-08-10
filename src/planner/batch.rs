@@ -59,7 +59,11 @@ mod tests {
         }
     }
 
-    fn config(max_bytes_per_batch: u64, max_files_per_batch: Option<usize>, sort_order: SortOrder) -> BatchConfig {
+    fn config(
+        max_bytes_per_batch: u64,
+        max_files_per_batch: Option<usize>,
+        sort_order: SortOrder,
+    ) -> BatchConfig {
         BatchConfig {
             max_bytes_per_batch,
             max_files_per_batch,
@@ -69,7 +73,10 @@ mod tests {
     }
 
     fn all_entries(batches: &[Batch]) -> Vec<Entry> {
-        let mut out: Vec<Entry> = batches.iter().flat_map(|b| b.entries.iter().cloned()).collect();
+        let mut out: Vec<Entry> = batches
+            .iter()
+            .flat_map(|b| b.entries.iter().cloned())
+            .collect();
         out.sort_by(|a, b| a.path.cmp(&b.path));
         out
     }
@@ -81,7 +88,9 @@ mod tests {
 
     // Distributions exercised across the assertions below.
     fn uniform() -> Vec<Entry> {
-        (0..20).map(|i| entry(&format!("uniform-{i}"), 1024)).collect()
+        (0..20)
+            .map(|i| entry(&format!("uniform-{i}"), 1024))
+            .collect()
     }
 
     fn all_tiny() -> Vec<Entry> {
@@ -136,8 +145,14 @@ mod tests {
         let first = pack(entries.clone(), &config);
         let second = pack(entries, &config);
 
-        let first: Vec<_> = first.iter().map(|b| b.entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>()).collect();
-        let second: Vec<_> = second.iter().map(|b| b.entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>()).collect();
+        let first: Vec<_> = first
+            .iter()
+            .map(|b| b.entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
+            .collect();
+        let second: Vec<_> = second
+            .iter()
+            .map(|b| b.entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
+            .collect();
         assert_eq!(first, second);
     }
 
@@ -163,13 +178,21 @@ mod tests {
 
     #[test]
     fn single_entry_larger_than_byte_budget_becomes_its_own_batch() {
-        let entries = vec![entry("small", 100), entry("oversized", 10_000), entry("small-2", 100)];
+        let entries = vec![
+            entry("small", 100),
+            entry("oversized", 10_000),
+            entry("small-2", 100),
+        ];
         let config = config(1_000, None, SortOrder::Descending);
         let batches = pack(entries, &config);
 
         let oversized_batch = batches
             .iter()
-            .find(|b| b.entries.iter().any(|e| e.path == PathBuf::from("oversized")))
+            .find(|b| {
+                b.entries
+                    .iter()
+                    .any(|e| e.path == PathBuf::from("oversized"))
+            })
             .expect("oversized entry should be in some batch");
         assert_eq!(oversized_batch.entries.len(), 1);
         assert_eq!(oversized_batch.total_bytes, 10_000);

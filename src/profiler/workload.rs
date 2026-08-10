@@ -49,6 +49,10 @@ impl Workload {
     /// function performs.
     pub(crate) fn partition(entries: Vec<Entry>, threshold: u64) -> Self {
         let (small, large) = entries.into_iter().partition(|e| e.size <= threshold);
-        Self { small, large, directories: Vec::new() }
+        Self {
+            small,
+            large,
+            directories: Vec::new(),
+        }
     }
 }

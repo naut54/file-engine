@@ -96,7 +96,9 @@ impl CopyBuilder {
         let reporter = ProgressReporter::new(tx);
 
         let concurrency = self.concurrency.unwrap_or_else(default_concurrency);
-        let threshold = self.small_file_threshold.unwrap_or(DEFAULT_SMALL_FILE_THRESHOLD);
+        let threshold = self
+            .small_file_threshold
+            .unwrap_or(DEFAULT_SMALL_FILE_THRESHOLD);
         let cancel_for_task = cancel.clone();
 
         let join_handle = tokio::spawn(async move {

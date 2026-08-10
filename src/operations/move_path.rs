@@ -5,7 +5,9 @@ use std::path::{Path, PathBuf};
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{Error, Result};
-use crate::planner::{BatchConfig, CopyAction, EntryAction, ErrorStrategy, OperationOutcome, StopReason};
+use crate::planner::{
+    BatchConfig, CopyAction, EntryAction, ErrorStrategy, OperationOutcome, StopReason,
+};
 use crate::profiler::{Entry, DEFAULT_SMALL_FILE_THRESHOLD};
 use crate::progress::{Progress, ProgressReporter};
 
@@ -82,7 +84,9 @@ impl MoveBuilder {
         let reporter = ProgressReporter::new(tx);
 
         let concurrency = self.concurrency.unwrap_or_else(default_concurrency);
-        let threshold = self.small_file_threshold.unwrap_or(DEFAULT_SMALL_FILE_THRESHOLD);
+        let threshold = self
+            .small_file_threshold
+            .unwrap_or(DEFAULT_SMALL_FILE_THRESHOLD);
         let cancel_for_task = cancel.clone();
 
         let join_handle = tokio::spawn(async move {
@@ -200,18 +204,27 @@ async fn sweep(
     let entries = outcome.succeeded.clone();
     let mut deleted_paths: HashSet<PathBuf> = HashSet::new();
 
-    reporter.send(Progress::Started { bytes_total: None, entries_total: entries.len() });
+    reporter.send(Progress::Started {
+        bytes_total: None,
+        entries_total: entries.len(),
+    });
 
     for entry in &entries {
-        reporter.send(Progress::EntryStarted { entry: entry.clone() });
+        reporter.send(Progress::EntryStarted {
+            entry: entry.clone(),
+        });
 
         match remove_source(entry).await {
             Ok(()) => {
-                reporter.send(Progress::EntryCompleted { entry: entry.clone() });
+                reporter.send(Progress::EntryCompleted {
+                    entry: entry.clone(),
+                });
                 deleted_paths.insert(entry.path.clone());
             }
             Err(err) => {
-                reporter.send(Progress::EntryFailed { entry: entry.clone() });
+                reporter.send(Progress::EntryFailed {
+                    entry: entry.clone(),
+                });
                 let fatal = err.is_fatal();
                 let reason = if fatal {
                     Some(StopReason::Fatal)
@@ -280,10 +293,20 @@ async fn restore_source(entry: &Entry, dest_root: &Path) -> Result<()> {
 
 fn classify_error(err: io::Error, path: &Path) -> Error {
     match err.kind() {
-        io::ErrorKind::NotFound => Error::SourceNotFound { path: path.to_path_buf() },
-        io::ErrorKind::PermissionDenied => Error::PermissionDenied { path: path.to_path_buf() },
-        io::ErrorKind::StorageFull => Error::NoSpace { needed: 0, available: 0 },
-        _ => Error::Io { path: path.to_path_buf(), source: err },
+        io::ErrorKind::NotFound => Error::SourceNotFound {
+            path: path.to_path_buf(),
+        },
+        io::ErrorKind::PermissionDenied => Error::PermissionDenied {
+            path: path.to_path_buf(),
+        },
+        io::ErrorKind::StorageFull => Error::NoSpace {
+            needed: 0,
+            available: 0,
+        },
+        _ => Error::Io {
+            path: path.to_path_buf(),
+            source: err,
+        },
     }
 }
 
@@ -303,9 +326,16 @@ mod tests {
 
     #[test]
     fn is_cross_device_false_for_other_kinds() {
-        for kind in [io::ErrorKind::PermissionDenied, io::ErrorKind::NotFound, io::ErrorKind::Other] {
+        for kind in [
+            io::ErrorKind::PermissionDenied,
+            io::ErrorKind::NotFound,
+            io::ErrorKind::Other,
+        ] {
             let err = io::Error::from(kind);
-            assert!(!is_cross_device(&err), "{kind:?} should not be classified as cross-device");
+            assert!(
+                !is_cross_device(&err),
+                "{kind:?} should not be classified as cross-device"
+            );
         }
     }
 
@@ -329,7 +359,12 @@ mod tests {
     // cross-compile of `--tests` was actually run.
     #[cfg(unix)]
     fn entry(path: PathBuf, relative_path: PathBuf, size: u64) -> Entry {
-        Entry { path, relative_path, size, modified: None }
+        Entry {
+            path,
+            relative_path,
+            size,
+            modified: None,
+        }
     }
 
     #[tokio::test]
@@ -355,7 +390,10 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(outcome.succeeded.is_empty(), "fast path doesn't enumerate entries");
+        assert!(
+            outcome.succeeded.is_empty(),
+            "fast path doesn't enumerate entries"
+        );
         assert!(!source.exists());
         assert_eq!(fs::read(&dest).unwrap(), b"hello");
     }
@@ -448,12 +486,21 @@ mod tests {
         // unlink needs write+execute on the containing directory, so
         // locking it down makes deleting `a` fail with permission denied.
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o555)).unwrap();
-        sweep(&mut outcome, dest_dir.path(), ErrorStrategy::ContinueAndCollect, ProgressReporter::noop()).await;
+        sweep(
+            &mut outcome,
+            dest_dir.path(),
+            ErrorStrategy::ContinueAndCollect,
+            ProgressReporter::noop(),
+        )
+        .await;
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(outcome.cleanup_failed.len(), 1);
         assert_eq!(outcome.cleanup_failed[0].0.path, a);
-        assert!(a.exists(), "a's deletion should have failed, leaving it in place");
+        assert!(
+            a.exists(),
+            "a's deletion should have failed, leaving it in place"
+        );
         assert!(!b.exists(), "b's deletion should still have succeeded");
         assert_eq!(outcome.stopped_early, None);
     }
@@ -487,13 +534,25 @@ mod tests {
         outcome.succeeded = vec![entry_a, entry_b, entry_c];
 
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o555)).unwrap();
-        sweep(&mut outcome, dest_dir.path(), ErrorStrategy::AbortOnError, ProgressReporter::noop()).await;
+        sweep(
+            &mut outcome,
+            dest_dir.path(),
+            ErrorStrategy::AbortOnError,
+            ProgressReporter::noop(),
+        )
+        .await;
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(outcome.stopped_early, Some(StopReason::AbortOnError));
         assert!(a.exists());
-        assert!(b.exists(), "b comes after the triggering failure, so it should never be attempted");
-        assert!(c.exists(), "c comes after the triggering failure, so it should never be attempted");
+        assert!(
+            b.exists(),
+            "b comes after the triggering failure, so it should never be attempted"
+        );
+        assert!(
+            c.exists(),
+            "c comes after the triggering failure, so it should never be attempted"
+        );
     }
 
     #[cfg(unix)]
@@ -525,14 +584,23 @@ mod tests {
         outcome.succeeded = vec![entry_b, entry_a];
 
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o555)).unwrap();
-        sweep(&mut outcome, dest_dir.path(), ErrorStrategy::Undo, ProgressReporter::noop()).await;
+        sweep(
+            &mut outcome,
+            dest_dir.path(),
+            ErrorStrategy::Undo,
+            ProgressReporter::noop(),
+        )
+        .await;
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
 
         assert!(outcome.succeeded.is_empty());
         assert!(outcome.cleanup_failed.is_empty());
         assert_eq!(outcome.stopped_early, Some(StopReason::Undo));
 
-        assert!(a.exists(), "a's source was never removed, since its deletion failed");
+        assert!(
+            a.exists(),
+            "a's source was never removed, since its deletion failed"
+        );
         assert!(b.exists(), "b's source should have been restored from dest");
         assert_eq!(fs::read(&b).unwrap(), b"b");
 

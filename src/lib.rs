@@ -34,18 +34,18 @@ pub use watch_event::{WatchEvent, WatchEventKind};
 #[cfg(feature = "watch")]
 pub use watch_handle::WatchHandle;
 
-#[cfg(feature = "operations")]
-pub use operations::CopyBuilder;
-#[cfg(feature = "compress")]
-pub use operations::{CompressBuilder, CompressFormat};
-#[cfg(feature = "operations")]
-pub use operations::MoveBuilder;
-#[cfg(feature = "sync")]
-pub use operations::{SyncBuilder, SyncOutcome};
-#[cfg(feature = "watch")]
-pub use operations::WatchBuilder;
 #[cfg(feature = "sync")]
 pub use operations::diff::DiffStrategy;
+#[cfg(feature = "operations")]
+pub use operations::CopyBuilder;
+#[cfg(feature = "operations")]
+pub use operations::MoveBuilder;
+#[cfg(feature = "watch")]
+pub use operations::WatchBuilder;
+#[cfg(feature = "compress")]
+pub use operations::{CompressBuilder, CompressFormat};
+#[cfg(feature = "sync")]
+pub use operations::{SyncBuilder, SyncOutcome};
 
 // These aren't just re-exports of convenience — `ErrorStrategy`,
 // `SortOrder`, and `DiffStrategy` are parameter types on the builders'
@@ -129,11 +129,19 @@ mod tests {
     /// actually ran, and one terminal event (`EntryCompleted` or
     /// `EntryFailed`) per entry.
     fn assert_well_formed(events: &[Progress], expected_entries: usize) {
-        let started_at = events.iter().position(|e| matches!(e, Progress::Started { .. }));
+        let started_at = events
+            .iter()
+            .position(|e| matches!(e, Progress::Started { .. }));
         assert!(started_at.is_some(), "expected a Started event");
 
-        if let Some(first_entry_started) = events.iter().position(|e| matches!(e, Progress::EntryStarted { .. })) {
-            assert!(started_at.unwrap() < first_entry_started, "Started must come before any EntryStarted");
+        if let Some(first_entry_started) = events
+            .iter()
+            .position(|e| matches!(e, Progress::EntryStarted { .. }))
+        {
+            assert!(
+                started_at.unwrap() < first_entry_started,
+                "Started must come before any EntryStarted"
+            );
         }
 
         let entries_total = events
@@ -147,7 +155,12 @@ mod tests {
 
         let terminal_count = events
             .iter()
-            .filter(|e| matches!(e, Progress::EntryCompleted { .. } | Progress::EntryFailed { .. }))
+            .filter(|e| {
+                matches!(
+                    e,
+                    Progress::EntryCompleted { .. } | Progress::EntryFailed { .. }
+                )
+            })
             .count();
         assert_eq!(terminal_count, expected_entries);
     }
@@ -159,7 +172,10 @@ mod tests {
         fs::write(src_dir.path().join("a.txt"), b"hello").unwrap();
 
         let engine = FileEngine::new();
-        let mut handle = engine.copy(src_dir.path(), dest_dir.path()).start().unwrap();
+        let mut handle = engine
+            .copy(src_dir.path(), dest_dir.path())
+            .start()
+            .unwrap();
 
         let mut events = Vec::new();
         while let Some(event) = handle.progress().next().await {
@@ -184,7 +200,10 @@ mod tests {
         fs::write(&src_file, b"hello").unwrap();
 
         let engine = FileEngine::new();
-        let handle = engine.move_path(root.path().join("a.txt"), dest_file.clone()).start().unwrap();
+        let handle = engine
+            .move_path(root.path().join("a.txt"), dest_file.clone())
+            .start()
+            .unwrap();
         let outcome = handle.await.unwrap();
 
         // Fast path enumerates no entries — matches move_path.rs's tests.
@@ -201,7 +220,10 @@ mod tests {
         fs::write(dest_dir.path().join("orphan.txt"), b"stale").unwrap();
 
         let engine = FileEngine::new();
-        let handle = engine.sync(src_dir.path(), dest_dir.path()).start().unwrap();
+        let handle = engine
+            .sync(src_dir.path(), dest_dir.path())
+            .start()
+            .unwrap();
         let outcome = handle.await.unwrap();
 
         assert_eq!(outcome.copy.succeeded.len(), 1);

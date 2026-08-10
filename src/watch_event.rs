@@ -29,7 +29,10 @@ impl From<notify::Event> for WatchEvent {
                 WatchEventKind::Other
             }
         };
-        WatchEvent { kind, paths: event.paths }
+        WatchEvent {
+            kind,
+            paths: event.paths,
+        }
     }
 }
 
@@ -38,7 +41,11 @@ mod tests {
     use super::*;
 
     fn event(kind: notify::EventKind) -> notify::Event {
-        notify::Event { kind, paths: vec![PathBuf::from("a")], attrs: Default::default() }
+        notify::Event {
+            kind,
+            paths: vec![PathBuf::from("a")],
+            attrs: Default::default(),
+        }
     }
 
     #[test]
@@ -55,8 +62,12 @@ mod tests {
     #[test]
     fn modify_variants_collapse_to_modified() {
         for kind in [
-            notify::EventKind::Modify(notify::event::ModifyKind::Data(notify::event::DataChange::Any)),
-            notify::EventKind::Modify(notify::event::ModifyKind::Name(notify::event::RenameMode::Any)),
+            notify::EventKind::Modify(notify::event::ModifyKind::Data(
+                notify::event::DataChange::Any,
+            )),
+            notify::EventKind::Modify(notify::event::ModifyKind::Name(
+                notify::event::RenameMode::Any,
+            )),
             notify::EventKind::Modify(notify::event::ModifyKind::Any),
         ] {
             assert_eq!(WatchEvent::from(event(kind)).kind, WatchEventKind::Modified);

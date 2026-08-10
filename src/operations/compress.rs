@@ -62,7 +62,9 @@ impl CompressBuilder {
         let reporter = ProgressReporter::new(tx);
 
         let concurrency = self.concurrency.unwrap_or_else(default_concurrency);
-        let threshold = self.small_file_threshold.unwrap_or(DEFAULT_SMALL_FILE_THRESHOLD);
+        let threshold = self
+            .small_file_threshold
+            .unwrap_or(DEFAULT_SMALL_FILE_THRESHOLD);
         let cancel_for_task = cancel.clone();
 
         let join_handle = tokio::spawn(async move {
@@ -93,7 +95,9 @@ fn infer_format(dest: &Path) -> Result<CompressFormat> {
     match dest.extension().and_then(|e| e.to_str()) {
         Some("zip") => Ok(CompressFormat::Zip),
         Some("gz") => Ok(CompressFormat::Gzip),
-        _ => Err(Error::UnknownCompressFormat { path: dest.to_path_buf() }),
+        _ => Err(Error::UnknownCompressFormat {
+            path: dest.to_path_buf(),
+        }),
     }
 }
 
@@ -130,7 +134,9 @@ pub(crate) async fn compress(
             .await
             .map_err(|e| classify_error(e, source))?;
         if metadata.is_dir() {
-            return Err(Error::GzipRequiresFile { path: source.to_path_buf() });
+            return Err(Error::GzipRequiresFile {
+                path: source.to_path_buf(),
+            });
         }
         // A single blocking operation with no natural mid-flight
         // checkpoint — unlike compress_zip, cancellation isn't checked
@@ -139,10 +145,23 @@ pub(crate) async fn compress(
         return compress_gzip(source, dest, reporter).await;
     }
 
-    compress_zip(source, dest, small_file_threshold, config, concurrency, cancel, reporter).await
+    compress_zip(
+        source,
+        dest,
+        small_file_threshold,
+        config,
+        concurrency,
+        cancel,
+        reporter,
+    )
+    .await
 }
 
-async fn compress_gzip(source: &Path, dest: &Path, reporter: ProgressReporter) -> Result<OperationOutcome> {
+async fn compress_gzip(
+    source: &Path,
+    dest: &Path,
+    reporter: ProgressReporter,
+) -> Result<OperationOutcome> {
     let source = source.to_path_buf();
     let dest = dest.to_path_buf();
 
@@ -151,7 +170,11 @@ async fn compress_gzip(source: &Path, dest: &Path, reporter: ProgressReporter) -
         .expect("gzip compression task panicked")
 }
 
-fn compress_gzip_blocking(source: &Path, dest: &Path, reporter: ProgressReporter) -> Result<OperationOutcome> {
+fn compress_gzip_blocking(
+    source: &Path,
+    dest: &Path,
+    reporter: ProgressReporter,
+) -> Result<OperationOutcome> {
     let metadata = std::fs::metadata(source).map_err(|e| classify_error(e, source))?;
     let entry = Entry {
         path: source.to_path_buf(),
@@ -160,8 +183,13 @@ fn compress_gzip_blocking(source: &Path, dest: &Path, reporter: ProgressReporter
         modified: metadata.modified().ok(),
     };
 
-    reporter.send(Progress::Started { bytes_total: Some(entry.size), entries_total: 1 });
-    reporter.send(Progress::EntryStarted { entry: entry.clone() });
+    reporter.send(Progress::Started {
+        bytes_total: Some(entry.size),
+        entries_total: 1,
+    });
+    reporter.send(Progress::EntryStarted {
+        entry: entry.clone(),
+    });
 
     let result: Result<()> = (|| {
         let mut input = std::fs::File::open(source).map_err(|e| classify_error(e, source))?;
@@ -175,8 +203,13 @@ fn compress_gzip_blocking(source: &Path, dest: &Path, reporter: ProgressReporter
 
     match result {
         Ok(()) => {
-            reporter.send(Progress::EntryCompleted { entry: entry.clone() });
-            Ok(OperationOutcome { succeeded: vec![entry], ..Default::default() })
+            reporter.send(Progress::EntryCompleted {
+                entry: entry.clone(),
+            });
+            Ok(OperationOutcome {
+                succeeded: vec![entry],
+                ..Default::default()
+            })
         }
         Err(err) => {
             reporter.send(Progress::EntryFailed { entry });
@@ -202,9 +235,21 @@ async fn compress_zip(
     let workload = scan(source, small_file_threshold).await?;
     let execution_plan = plan(workload, config);
 
-    let bytes_total: u64 = execution_plan.batches.iter().map(|b| b.total_bytes).sum::<u64>()
-        + execution_plan.streams.iter().map(|s| s.entry.size).sum::<u64>();
-    let entries_total: usize = execution_plan.batches.iter().map(|b| b.entries.len()).sum::<usize>()
+    let bytes_total: u64 = execution_plan
+        .batches
+        .iter()
+        .map(|b| b.total_bytes)
+        .sum::<u64>()
+        + execution_plan
+            .streams
+            .iter()
+            .map(|s| s.entry.size)
+            .sum::<u64>();
+    let entries_total: usize = execution_plan
+        .batches
+        .iter()
+        .map(|b| b.entries.len())
+        .sum::<usize>()
         + execution_plan.streams.len();
 
     let mut units: Vec<Vec<Entry>> =
@@ -212,7 +257,10 @@ async fn compress_zip(
     units.extend(execution_plan.batches.into_iter().map(|b| b.entries));
     units.extend(execution_plan.streams.into_iter().map(|s| vec![s.entry]));
 
-    reporter.send(Progress::Started { bytes_total: Some(bytes_total), entries_total });
+    reporter.send(Progress::Started {
+        bytes_total: Some(bytes_total),
+        entries_total,
+    });
 
     let concurrency = concurrency.max(1);
     let (tx, rx) = mpsc::channel::<WriterMsg>(concurrency);
@@ -243,7 +291,7 @@ async fn compress_zip(
         let permit = tokio::select! {
             biased;
             _ = cancel.cancelled() => {
-                stopped_by_cancel = true;   
+                stopped_by_cancel = true;
                 break;
             }
             permit = Arc::clone(&semaphore).acquire_owned() => {
@@ -269,7 +317,9 @@ async fn compress_zip(
                     break;
                 }
 
-                reporter.send(Progress::EntryStarted { entry: entry.clone() });
+                reporter.send(Progress::EntryStarted {
+                    entry: entry.clone(),
+                });
 
                 let msg = match tokio::fs::read(&entry.path).await {
                     Ok(bytes) => WriterMsg::Data { entry, bytes },
@@ -277,7 +327,9 @@ async fn compress_zip(
                         // Reported directly here, not by the writer —
                         // this entry never reaches it (see
                         // dev-docs/design/handle-progress.md, "compress_zip").
-                        reporter.send(Progress::EntryFailed { entry: entry.clone() });
+                        reporter.send(Progress::EntryFailed {
+                            entry: entry.clone(),
+                        });
                         let error = classify_error(e, &entry.path);
                         WriterMsg::Failed { entry, error }
                     }
@@ -310,7 +362,10 @@ async fn compress_zip(
     // stop/cleanup decision here for the cancellation case specifically.
     if stopped_by_cancel && outcome.stopped_early.is_none() {
         outcome.stopped_early = Some(StopReason::Cancelled);
-        if matches!(error_strategy, ErrorStrategy::AbortOnError | ErrorStrategy::Undo) {
+        if matches!(
+            error_strategy,
+            ErrorStrategy::AbortOnError | ErrorStrategy::Undo
+        ) {
             let _ = std::fs::remove_file(dest);
             outcome.succeeded.clear();
         }
@@ -342,13 +397,20 @@ fn write_archive(
 
                 match write_result {
                     Ok(()) => {
-                        reporter.send(Progress::EntryCompleted { entry: entry.clone() });
+                        reporter.send(Progress::EntryCompleted {
+                            entry: entry.clone(),
+                        });
                         outcome.succeeded.push(entry);
                     }
                     Err(err) => {
-                        reporter.send(Progress::EntryFailed { entry: entry.clone() });
+                        reporter.send(Progress::EntryFailed {
+                            entry: entry.clone(),
+                        });
                         let path = entry.path.clone();
-                        let error = Error::Io { path, source: std::io::Error::other(err.to_string()) };
+                        let error = Error::Io {
+                            path,
+                            source: std::io::Error::other(err.to_string()),
+                        };
                         record_failure(&mut outcome, entry, error, error_strategy, &stop);
                     }
                 }
@@ -374,7 +436,11 @@ fn write_archive(
         source: std::io::Error::other(err.to_string()),
     })?;
 
-    if matches!(error_strategy, ErrorStrategy::AbortOnError | ErrorStrategy::Undo) && outcome.stopped_early.is_some() {
+    if matches!(
+        error_strategy,
+        ErrorStrategy::AbortOnError | ErrorStrategy::Undo
+    ) && outcome.stopped_early.is_some()
+    {
         let _ = std::fs::remove_file(&dest);
         outcome.succeeded.clear();
     }
@@ -412,10 +478,20 @@ fn record_failure(
 
 fn classify_error(err: std::io::Error, path: &Path) -> Error {
     match err.kind() {
-        std::io::ErrorKind::NotFound => Error::SourceNotFound { path: path.to_path_buf() },
-        std::io::ErrorKind::PermissionDenied => Error::PermissionDenied { path: path.to_path_buf() },
-        std::io::ErrorKind::StorageFull => Error::NoSpace { needed: 0, available: 0 },
-        _ => Error::Io { path: path.to_path_buf(), source: err },
+        std::io::ErrorKind::NotFound => Error::SourceNotFound {
+            path: path.to_path_buf(),
+        },
+        std::io::ErrorKind::PermissionDenied => Error::PermissionDenied {
+            path: path.to_path_buf(),
+        },
+        std::io::ErrorKind::StorageFull => Error::NoSpace {
+            needed: 0,
+            available: 0,
+        },
+        _ => Error::Io {
+            path: path.to_path_buf(),
+            source: err,
+        },
     }
 }
 
@@ -452,9 +528,18 @@ mod tests {
         fs::write(src_dir.path().join("a.txt"), b"aaa").unwrap();
         fs::write(src_dir.path().join("nested").join("b.txt"), b"bbb").unwrap();
 
-        let outcome = compress(src_dir.path(), &dest, None, 256 * 1024, &BatchConfig::default(), 2, CancellationToken::new(), ProgressReporter::noop())
-            .await
-            .unwrap();
+        let outcome = compress(
+            src_dir.path(),
+            &dest,
+            None,
+            256 * 1024,
+            &BatchConfig::default(),
+            2,
+            CancellationToken::new(),
+            ProgressReporter::noop(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(outcome.succeeded.len(), 2);
         assert!(outcome.failed.is_empty());
@@ -472,7 +557,18 @@ mod tests {
         let dest = out_dir.path().join("file.txt.gz");
         fs::write(&source, b"hello gzip").unwrap();
 
-        let outcome = compress(&source, &dest, None, 256, &BatchConfig::default(), 2, CancellationToken::new(), ProgressReporter::noop()).await.unwrap();
+        let outcome = compress(
+            &source,
+            &dest,
+            None,
+            256,
+            &BatchConfig::default(),
+            2,
+            CancellationToken::new(),
+            ProgressReporter::noop(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(outcome.succeeded.len(), 1);
         assert!(dest.exists());
@@ -492,7 +588,18 @@ mod tests {
         let dest = out_dir.path().join("file.zip");
         fs::write(&source, b"hello zip").unwrap();
 
-        let outcome = compress(&source, &dest, None, 256, &BatchConfig::default(), 2, CancellationToken::new(), ProgressReporter::noop()).await.unwrap();
+        let outcome = compress(
+            &source,
+            &dest,
+            None,
+            256,
+            &BatchConfig::default(),
+            2,
+            CancellationToken::new(),
+            ProgressReporter::noop(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(outcome.succeeded.len(), 1);
         let entries = read_zip_entries(&dest);
@@ -537,7 +644,17 @@ mod tests {
         fs::write(&unreadable, b"c").unwrap();
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o000)).unwrap();
 
-        let outcome = compress(src_dir.path(), &dest, None, 256, &BatchConfig::default(), 2, CancellationToken::new(), ProgressReporter::noop()).await;
+        let outcome = compress(
+            src_dir.path(),
+            &dest,
+            None,
+            256,
+            &BatchConfig::default(),
+            2,
+            CancellationToken::new(),
+            ProgressReporter::noop(),
+        )
+        .await;
 
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
 
@@ -569,7 +686,17 @@ mod tests {
         let mut config = BatchConfig::default();
         config.error_strategy = ErrorStrategy::AbortOnError;
 
-        let outcome = compress(src_dir.path(), &dest, None, 256, &config, 1, CancellationToken::new(), ProgressReporter::noop()).await;
+        let outcome = compress(
+            src_dir.path(),
+            &dest,
+            None,
+            256,
+            &config,
+            1,
+            CancellationToken::new(),
+            ProgressReporter::noop(),
+        )
+        .await;
 
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
 
@@ -595,7 +722,17 @@ mod tests {
         let mut config = BatchConfig::default();
         config.error_strategy = ErrorStrategy::Undo;
 
-        let outcome = compress(src_dir.path(), &dest, None, 256, &config, 1, CancellationToken::new(), ProgressReporter::noop()).await;
+        let outcome = compress(
+            src_dir.path(),
+            &dest,
+            None,
+            256,
+            &config,
+            1,
+            CancellationToken::new(),
+            ProgressReporter::noop(),
+        )
+        .await;
 
         fs::set_permissions(&unreadable, fs::Permissions::from_mode(0o644)).unwrap();
 
@@ -624,9 +761,18 @@ mod tests {
         let mut config = BatchConfig::default();
         config.max_files_per_batch = Some(1);
 
-        let outcome = compress(src_dir.path(), &dest, None, 256 * 1024, &config, 2, CancellationToken::new(), ProgressReporter::noop())
-            .await
-            .unwrap();
+        let outcome = compress(
+            src_dir.path(),
+            &dest,
+            None,
+            256 * 1024,
+            &config,
+            2,
+            CancellationToken::new(),
+            ProgressReporter::noop(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(outcome.succeeded.len(), 50);
         assert!(outcome.failed.is_empty());
@@ -689,9 +835,18 @@ mod tests {
         let cancel = CancellationToken::new();
         cancel.cancel();
 
-        let outcome = compress(src_dir.path(), &dest, None, 256, &config, 1, cancel, ProgressReporter::noop())
-            .await
-            .unwrap();
+        let outcome = compress(
+            src_dir.path(),
+            &dest,
+            None,
+            256,
+            &config,
+            1,
+            cancel,
+            ProgressReporter::noop(),
+        )
+        .await
+        .unwrap();
 
         assert_eq!(outcome.stopped_early, Some(StopReason::Cancelled));
         assert!(!dest.exists());

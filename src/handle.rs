@@ -25,7 +25,11 @@ impl<T> Handle<T> {
         progress: tokio::sync::mpsc::UnboundedReceiver<Progress>,
         cancel: CancellationToken,
     ) -> Self {
-        Self { join_handle, progress: UnboundedReceiverStream::new(progress), cancel }
+        Self {
+            join_handle,
+            progress: UnboundedReceiverStream::new(progress),
+            cancel,
+        }
     }
 
     pub fn progress(&mut self) -> &mut (impl Stream<Item = Progress> + Unpin) {
@@ -90,7 +94,10 @@ mod tests {
         let (tx, rx) = mpsc::unbounded_channel();
         let reporter = crate::progress::ProgressReporter::new(tx);
         let join_handle = tokio::spawn(async move {
-            reporter.send(Progress::Started { bytes_total: None, entries_total: 1 });
+            reporter.send(Progress::Started {
+                bytes_total: None,
+                entries_total: 1,
+            });
             reporter.send(Progress::EntryStarted {
                 entry: test_entry(),
             });
@@ -100,8 +107,14 @@ mod tests {
         let mut handle = Handle::new(join_handle, rx, CancellationToken::new());
 
         use tokio_stream::StreamExt;
-        assert!(matches!(handle.progress().next().await, Some(Progress::Started { .. })));
-        assert!(matches!(handle.progress().next().await, Some(Progress::EntryStarted { .. })));
+        assert!(matches!(
+            handle.progress().next().await,
+            Some(Progress::Started { .. })
+        ));
+        assert!(matches!(
+            handle.progress().next().await,
+            Some(Progress::EntryStarted { .. })
+        ));
         assert!(handle.progress().next().await.is_none());
 
         handle.await.unwrap();
@@ -137,7 +150,11 @@ mod tests {
         drop(handle);
 
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert_eq!(*sentinel.lock().unwrap(), 2, "task should have run to completion despite the handle being dropped");
+        assert_eq!(
+            *sentinel.lock().unwrap(),
+            2,
+            "task should have run to completion despite the handle being dropped"
+        );
     }
 
     fn test_entry() -> crate::profiler::Entry {

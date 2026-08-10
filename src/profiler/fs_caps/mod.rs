@@ -73,7 +73,11 @@ fn nearest_existing_ancestor(path: &Path) -> Result<PathBuf> {
         }
         match current.parent() {
             Some(parent) => current = parent,
-            None => return Err(Error::SourceNotFound { path: path.to_path_buf() }),
+            None => {
+                return Err(Error::SourceNotFound {
+                    path: path.to_path_buf(),
+                })
+            }
         }
     }
 }

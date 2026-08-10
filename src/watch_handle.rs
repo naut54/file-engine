@@ -26,7 +26,11 @@ impl WatchHandle {
         events: tokio::sync::mpsc::UnboundedReceiver<WatchEvent>,
         cancel: CancellationToken,
     ) -> Self {
-        Self { join_handle, events: UnboundedReceiverStream::new(events), cancel }
+        Self {
+            join_handle,
+            events: UnboundedReceiverStream::new(events),
+            cancel,
+        }
     }
 
     pub fn events(&mut self) -> &mut (impl Stream<Item = WatchEvent> + Unpin) {
@@ -65,7 +69,10 @@ mod tests {
     use crate::watch_event::WatchEventKind;
 
     fn event() -> WatchEvent {
-        WatchEvent { kind: WatchEventKind::Created, paths: vec![std::path::PathBuf::from("a")] }
+        WatchEvent {
+            kind: WatchEventKind::Created,
+            paths: vec![std::path::PathBuf::from("a")],
+        }
     }
 
     #[tokio::test]
@@ -135,6 +142,10 @@ mod tests {
         drop(handle);
 
         tokio::time::sleep(Duration::from_millis(50)).await;
-        assert_eq!(*sentinel.lock().unwrap(), 2, "task should have run to completion despite the handle being dropped");
+        assert_eq!(
+            *sentinel.lock().unwrap(),
+            2,
+            "task should have run to completion despite the handle being dropped"
+        );
     }
 }

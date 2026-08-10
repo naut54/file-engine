@@ -53,7 +53,9 @@ pub enum Error {
     /// "Decisions"), this describes a whole-destination risk, not a
     /// property of any specific entry — `is_fatal` accordingly.
     #[cfg(feature = "operations")]
-    #[error("destination filesystem ({filesystem}) has a known write-integrity issue on this platform")]
+    #[error(
+        "destination filesystem ({filesystem}) has a known write-integrity issue on this platform"
+    )]
     FilesystemIntegrityRisk { filesystem: String },
 }
 
@@ -71,7 +73,10 @@ impl Error {
     /// warnings-as-errors build (`.cargo/config.toml`).
     #[cfg(feature = "operations")]
     pub(crate) fn is_fatal(&self) -> bool {
-        matches!(self, Error::Cancelled | Error::NoSpace { .. } | Error::FilesystemIntegrityRisk { .. })
+        matches!(
+            self,
+            Error::Cancelled | Error::NoSpace { .. } | Error::FilesystemIntegrityRisk { .. }
+        )
     }
 }
 

@@ -66,13 +66,19 @@ async fn main() -> file_engine::Result<()> {
             Progress::DirectoryCompleted { .. } => {
                 dirs_completed += 1;
                 if dirs_completed % 500 == 0 {
-                    println!("...{dirs_completed} directories done ({:?} elapsed)", start.elapsed());
+                    println!(
+                        "...{dirs_completed} directories done ({:?} elapsed)",
+                        start.elapsed()
+                    );
                 }
             }
             Progress::DirectoryFailed { path } => {
                 eprintln!("FAILED (creating directory): {}", path.display());
             }
-            Progress::Started { bytes_total, entries_total } => match bytes_total {
+            Progress::Started {
+                bytes_total,
+                entries_total,
+            } => match bytes_total {
                 Some(bytes) => println!("started: {entries_total} entries, {bytes} bytes total"),
                 None => println!("started: {entries_total} entries"),
             },
@@ -80,7 +86,10 @@ async fn main() -> file_engine::Result<()> {
             Progress::EntryCompleted { .. } => {
                 completed += 1;
                 if completed % 200 == 0 {
-                    println!("...{completed} entries done ({:?} elapsed)", start.elapsed());
+                    println!(
+                        "...{completed} entries done ({:?} elapsed)",
+                        start.elapsed()
+                    );
                 }
             }
             Progress::EntryFailed { entry } => {

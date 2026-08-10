@@ -52,7 +52,10 @@ pub(crate) async fn dispatch<A: EntryAction + 'static>(
     units.extend(plan.batches.into_iter().map(|b| Unit::Batch(b.entries)));
     units.extend(plan.streams.into_iter().map(|s| Unit::Stream(s.entry)));
 
-    reporter.send(Progress::Started { bytes_total: Some(bytes_total), entries_total });
+    reporter.send(Progress::Started {
+        bytes_total: Some(bytes_total),
+        entries_total,
+    });
 
     let action = Arc::new(action);
     let dest_root = Arc::new(dest_root.to_path_buf());
@@ -100,15 +103,21 @@ pub(crate) async fn dispatch<A: EntryAction + 'static>(
             };
 
             for entry in entries {
-                reporter.send(Progress::EntryStarted { entry: entry.clone() });
+                reporter.send(Progress::EntryStarted {
+                    entry: entry.clone(),
+                });
 
                 match action.execute(&entry, &dest_root).await {
                     Ok(()) => {
-                        reporter.send(Progress::EntryCompleted { entry: entry.clone() });
+                        reporter.send(Progress::EntryCompleted {
+                            entry: entry.clone(),
+                        });
                         outcome.lock().unwrap().succeeded.push(entry);
                     }
                     Err(err) => {
-                        reporter.send(Progress::EntryFailed { entry: entry.clone() });
+                        reporter.send(Progress::EntryFailed {
+                            entry: entry.clone(),
+                        });
                         let fatal = err.is_fatal();
                         let reason = if fatal {
                             Some(StopReason::Fatal)
@@ -200,7 +209,10 @@ mod tests {
             batches: entries
                 .iter()
                 .cloned()
-                .map(|e| Batch { entries: vec![e], total_bytes: 1 })
+                .map(|e| Batch {
+                    entries: vec![e],
+                    total_bytes: 1,
+                })
                 .collect(),
             streams: Vec::new(),
         }
@@ -225,18 +237,29 @@ mod tests {
             Box::pin(async move {
                 let current = self.active.fetch_add(1, Ordering::SeqCst) + 1;
                 self.max_active.fetch_max(current, Ordering::SeqCst);
-                self.log.lock().unwrap().push(format!("start:{}", entry.path.display()));
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("start:{}", entry.path.display()));
 
                 if let Some(d) = self.delay_for.get(&entry.path) {
                     tokio::time::sleep(*d).await;
                 }
 
                 self.active.fetch_sub(1, Ordering::SeqCst);
-                self.log.lock().unwrap().push(format!("end:{}", entry.path.display()));
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("end:{}", entry.path.display()));
 
                 match self.fail.get(&entry.path) {
-                    Some(true) => Err(Error::NoSpace { needed: 0, available: 0 }),
-                    Some(false) => Err(Error::SourceNotFound { path: entry.path.clone() }),
+                    Some(true) => Err(Error::NoSpace {
+                        needed: 0,
+                        available: 0,
+                    }),
+                    Some(false) => Err(Error::SourceNotFound {
+                        path: entry.path.clone(),
+                    }),
                     None => Ok(()),
                 }
             })
@@ -248,7 +271,10 @@ mod tests {
             _dest_root: &'a Path,
         ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
             Box::pin(async move {
-                self.log.lock().unwrap().push(format!("undo:{}", entry.path.display()));
+                self.log
+                    .lock()
+                    .unwrap()
+                    .push(format!("undo:{}", entry.path.display()));
                 Ok(())
             })
         }
@@ -276,7 +302,10 @@ mod tests {
         let entries: Vec<Entry> = (0..6).map(|i| entry(&format!("e{i}"))).collect();
         let plan = single_entry_plan(&entries);
 
-        let delay_for = entries.iter().map(|e| (e.path.clone(), Duration::from_millis(30))).collect();
+        let delay_for = entries
+            .iter()
+            .map(|e| (e.path.clone(), Duration::from_millis(30)))
+            .collect();
         let (action, _log, max_active) = fake_action(delay_for, HashMap::new());
 
         let dest_root = tempdir().unwrap();
@@ -287,14 +316,20 @@ mod tests {
             ErrorStrategy::ContinueAndCollect,
             2,
             CancellationToken::new(),
-        ProgressReporter::noop(),
+            ProgressReporter::noop(),
         )
         .await;
 
         assert_eq!(outcome.succeeded.len(), 6);
         let observed_max = max_active.load(Ordering::SeqCst);
-        assert!(observed_max <= 2, "observed {observed_max} concurrent workers, expected <= 2");
-        assert!(observed_max >= 2, "expected overlap to actually happen under the delay, observed {observed_max}");
+        assert!(
+            observed_max <= 2,
+            "observed {observed_max} concurrent workers, expected <= 2"
+        );
+        assert!(
+            observed_max >= 2,
+            "expected overlap to actually happen under the delay, observed {observed_max}"
+        );
     }
 
     #[tokio::test]
@@ -311,11 +346,12 @@ mod tests {
             ErrorStrategy::ContinueAndCollect,
             3,
             CancellationToken::new(),
-        ProgressReporter::noop(),
+            ProgressReporter::noop(),
         )
         .await;
 
-        let mut succeeded_paths: Vec<_> = outcome.succeeded.iter().map(|e| e.path.clone()).collect();
+        let mut succeeded_paths: Vec<_> =
+            outcome.succeeded.iter().map(|e| e.path.clone()).collect();
         succeeded_paths.sort();
         let mut expected: Vec<_> = entries.iter().map(|e| e.path.clone()).collect();
         expected.sort();
@@ -343,7 +379,7 @@ mod tests {
             ErrorStrategy::ContinueAndCollect,
             3,
             CancellationToken::new(),
-        ProgressReporter::noop(),
+            ProgressReporter::noop(),
         )
         .await;
 
@@ -374,7 +410,7 @@ mod tests {
             ErrorStrategy::AbortOnError,
             2,
             CancellationToken::new(),
-        ProgressReporter::noop(),
+            ProgressReporter::noop(),
         )
         .await;
 
@@ -407,19 +443,31 @@ mod tests {
             ErrorStrategy::Undo,
             1,
             CancellationToken::new(),
-        ProgressReporter::noop(),
+            ProgressReporter::noop(),
         )
         .await;
 
-        assert!(outcome.succeeded.is_empty(), "succeeded should be cleared after rollback");
+        assert!(
+            outcome.succeeded.is_empty(),
+            "succeeded should be cleared after rollback"
+        );
         assert_eq!(outcome.failed.len(), 1);
         assert_eq!(outcome.failed[0].0.path, c.path);
         assert_eq!(outcome.stopped_early, Some(StopReason::Undo));
 
         let log = log.lock().unwrap();
-        let undo_b = log.iter().position(|l| l == "undo:b").expect("b should have been undone");
-        let undo_a = log.iter().position(|l| l == "undo:a").expect("a should have been undone");
-        assert!(undo_b < undo_a, "undo should replay in reverse completion order");
+        let undo_b = log
+            .iter()
+            .position(|l| l == "undo:b")
+            .expect("b should have been undone");
+        let undo_a = log
+            .iter()
+            .position(|l| l == "undo:a")
+            .expect("a should have been undone");
+        assert!(
+            undo_b < undo_a,
+            "undo should replay in reverse completion order"
+        );
     }
 
     #[tokio::test]
@@ -440,7 +488,7 @@ mod tests {
             ErrorStrategy::ContinueAndCollect,
             1,
             CancellationToken::new(),
-        ProgressReporter::noop(),
+            ProgressReporter::noop(),
         )
         .await;
 
@@ -466,7 +514,15 @@ mod tests {
         let trigger = cancel.clone();
 
         let (outcome, ()) = tokio::join!(
-            dispatch(plan, action, dest_root.path(), ErrorStrategy::ContinueAndCollect, 1, cancel, ProgressReporter::noop()),
+            dispatch(
+                plan,
+                action,
+                dest_root.path(),
+                ErrorStrategy::ContinueAndCollect,
+                1,
+                cancel,
+                ProgressReporter::noop()
+            ),
             async {
                 tokio::time::sleep(Duration::from_millis(20)).await;
                 trigger.cancel();
@@ -497,7 +553,15 @@ mod tests {
         let trigger = cancel.clone();
 
         let (outcome, ()) = tokio::join!(
-            dispatch(plan, action, dest_root.path(), ErrorStrategy::Undo, 1, cancel, ProgressReporter::noop()),
+            dispatch(
+                plan,
+                action,
+                dest_root.path(),
+                ErrorStrategy::Undo,
+                1,
+                cancel,
+                ProgressReporter::noop()
+            ),
             async {
                 tokio::time::sleep(Duration::from_millis(20)).await;
                 trigger.cancel();
@@ -528,7 +592,7 @@ mod tests {
             ErrorStrategy::ContinueAndCollect,
             2,
             cancel.clone(),
-        ProgressReporter::noop(),
+            ProgressReporter::noop(),
         )
         .await;
 
@@ -553,7 +617,7 @@ mod tests {
             ErrorStrategy::ContinueAndCollect,
             2,
             CancellationToken::new(),
-        ProgressReporter::noop(),
+            ProgressReporter::noop(),
         )
         .await;
 

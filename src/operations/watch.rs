@@ -21,7 +21,10 @@ pub struct WatchBuilder {
 
 impl WatchBuilder {
     pub(crate) fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into(), recursive: true }
+        Self {
+            path: path.into(),
+            recursive: true,
+        }
     }
 
     pub fn recursive(mut self, recursive: bool) -> Self {
@@ -48,9 +51,10 @@ async fn watch(
 ) -> Result<()> {
     let (fatal_tx, fatal_rx) = oneshot::channel();
 
-    let watcher = tokio::task::spawn_blocking(move || build_watcher(&path, recursive, tx, fatal_tx))
-        .await
-        .expect("watcher setup task panicked")?;
+    let watcher =
+        tokio::task::spawn_blocking(move || build_watcher(&path, recursive, tx, fatal_tx))
+            .await
+            .expect("watcher setup task panicked")?;
 
     tokio::select! {
         _ = cancel.cancelled() => {
@@ -78,37 +82,56 @@ fn build_watcher(
     let fatal_tx = Arc::new(Mutex::new(Some(fatal_tx)));
     let path_for_errors = path.to_path_buf();
 
-    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
-        Ok(event) => {
-            let _ = tx.send(WatchEvent::from(event));
-        }
-        Err(err) => {
-            // Only the first fatal error gets forwarded — `send`
-            // consumes the oneshot sender, and there's nothing more
-            // coherent to signal once the watch is already being torn
-            // down.
-            if let Some(sender) = fatal_tx.lock().unwrap().take() {
-                let _ = sender.send(classify_notify_error(err, &path_for_errors));
+    let mut watcher =
+        notify::recommended_watcher(move |res: notify::Result<notify::Event>| match res {
+            Ok(event) => {
+                let _ = tx.send(WatchEvent::from(event));
             }
-        }
-    })
-    .map_err(|e| classify_notify_error(e, path))?;
+            Err(err) => {
+                // Only the first fatal error gets forwarded — `send`
+                // consumes the oneshot sender, and there's nothing more
+                // coherent to signal once the watch is already being torn
+                // down.
+                if let Some(sender) = fatal_tx.lock().unwrap().take() {
+                    let _ = sender.send(classify_notify_error(err, &path_for_errors));
+                }
+            }
+        })
+        .map_err(|e| classify_notify_error(e, path))?;
 
-    let mode = if recursive { RecursiveMode::Recursive } else { RecursiveMode::NonRecursive };
-    watcher.watch(path, mode).map_err(|e| classify_notify_error(e, path))?;
+    let mode = if recursive {
+        RecursiveMode::Recursive
+    } else {
+        RecursiveMode::NonRecursive
+    };
+    watcher
+        .watch(path, mode)
+        .map_err(|e| classify_notify_error(e, path))?;
 
     Ok(watcher)
 }
 
 fn classify_notify_error(err: notify::Error, path: &Path) -> Error {
     match err.kind {
-        notify::ErrorKind::PathNotFound => Error::SourceNotFound { path: path.to_path_buf() },
-        notify::ErrorKind::Io(io_err) => match io_err.kind() {
-            std::io::ErrorKind::NotFound => Error::SourceNotFound { path: path.to_path_buf() },
-            std::io::ErrorKind::PermissionDenied => Error::PermissionDenied { path: path.to_path_buf() },
-            _ => Error::Io { path: path.to_path_buf(), source: io_err },
+        notify::ErrorKind::PathNotFound => Error::SourceNotFound {
+            path: path.to_path_buf(),
         },
-        _ => Error::Io { path: path.to_path_buf(), source: std::io::Error::other(err.to_string()) },
+        notify::ErrorKind::Io(io_err) => match io_err.kind() {
+            std::io::ErrorKind::NotFound => Error::SourceNotFound {
+                path: path.to_path_buf(),
+            },
+            std::io::ErrorKind::PermissionDenied => Error::PermissionDenied {
+                path: path.to_path_buf(),
+            },
+            _ => Error::Io {
+                path: path.to_path_buf(),
+                source: io_err,
+            },
+        },
+        _ => Error::Io {
+            path: path.to_path_buf(),
+            source: std::io::Error::other(err.to_string()),
+        },
     }
 }
 
@@ -141,7 +164,11 @@ mod tests {
     ) -> WatchEvent {
         tokio::time::timeout(EVENT_TIMEOUT, async {
             loop {
-                let event = handle.events().next().await.expect("event stream ended unexpectedly");
+                let event = handle
+                    .events()
+                    .next()
+                    .await
+                    .expect("event stream ended unexpectedly");
                 if predicate(&event) {
                     return event;
                 }
@@ -188,8 +215,11 @@ mod tests {
                 let deadline = tokio::time::Instant::now() + Duration::from_millis(100);
                 let observed = tokio::time::timeout_at(deadline, async {
                     loop {
-                        let event =
-                            handle.events().next().await.expect("event stream ended before the watcher was ready");
+                        let event = handle
+                            .events()
+                            .next()
+                            .await
+                            .expect("event stream ended before the watcher was ready");
                         if event.paths.contains(&probe) {
                             return;
                         }
@@ -227,7 +257,10 @@ mod tests {
         let file = base.join("a.txt");
         fs::write(&file, b"hello").unwrap();
 
-        let event = next_matching(&mut handle, |e| e.kind == WatchEventKind::Created && e.paths.contains(&file)).await;
+        let event = next_matching(&mut handle, |e| {
+            e.kind == WatchEventKind::Created && e.paths.contains(&file)
+        })
+        .await;
         assert_eq!(event.kind, WatchEventKind::Created);
 
         handle.cancel();
@@ -245,11 +278,17 @@ mod tests {
         await_watcher_ready(&mut handle, &base).await;
 
         fs::write(&file, b"changed").unwrap();
-        let modified = next_matching(&mut handle, |e| e.kind == WatchEventKind::Modified && e.paths.contains(&file)).await;
+        let modified = next_matching(&mut handle, |e| {
+            e.kind == WatchEventKind::Modified && e.paths.contains(&file)
+        })
+        .await;
         assert_eq!(modified.kind, WatchEventKind::Modified);
 
         fs::remove_file(&file).unwrap();
-        let removed = next_matching(&mut handle, |e| e.kind == WatchEventKind::Removed && e.paths.contains(&file)).await;
+        let removed = next_matching(&mut handle, |e| {
+            e.kind == WatchEventKind::Removed && e.paths.contains(&file)
+        })
+        .await;
         assert_eq!(removed.kind, WatchEventKind::Removed);
 
         handle.cancel();
@@ -297,8 +336,14 @@ mod tests {
         // change afterward, rather than just waiting out a timeout.
         let top_level_file = base.join("top.txt");
         fs::write(&top_level_file, b"hello").unwrap();
-        let event = next_matching(&mut handle, |e| e.paths.contains(&top_level_file) || e.paths.contains(&file)).await;
-        assert!(event.paths.contains(&top_level_file), "should not have observed the subdirectory change");
+        let event = next_matching(&mut handle, |e| {
+            e.paths.contains(&top_level_file) || e.paths.contains(&file)
+        })
+        .await;
+        assert!(
+            event.paths.contains(&top_level_file),
+            "should not have observed the subdirectory change"
+        );
 
         handle.cancel();
         handle.await.unwrap();

@@ -33,7 +33,12 @@ pub(crate) struct SyncPlan {
 /// in the first place, isn't treated as "changed" on every single sync
 /// run. `Duration::ZERO` (native filesystems, sub-second resolution)
 /// preserves exact comparison.
-pub(crate) async fn diff(source: &Path, dest: &Path, strategy: DiffStrategy, tolerance: Duration) -> Result<SyncPlan> {
+pub(crate) async fn diff(
+    source: &Path,
+    dest: &Path,
+    strategy: DiffStrategy,
+    tolerance: Duration,
+) -> Result<SyncPlan> {
     let source_entries = flat_entries(source).await?;
     // Unlike `source`, a missing `dest` isn't an error here — it's the
     // normal shape of a first sync into a destination that doesn't exist
@@ -87,7 +92,12 @@ async fn flat_entries(root: &Path) -> Result<Vec<Entry>> {
     Ok(entries)
 }
 
-async fn changed(source: &Entry, dest: &Entry, strategy: DiffStrategy, tolerance: Duration) -> Result<bool> {
+async fn changed(
+    source: &Entry,
+    dest: &Entry,
+    strategy: DiffStrategy,
+    tolerance: Duration,
+) -> Result<bool> {
     match strategy {
         DiffStrategy::SizeAndModifiedTime => {
             // Both timestamps present is the common case, where the
@@ -97,7 +107,9 @@ async fn changed(source: &Entry, dest: &Entry, strategy: DiffStrategy, tolerance
             // there's no destination timestamp to be coarse *about* if
             // one side doesn't have one at all.
             let newer = match (source.modified, dest.modified) {
-                (Some(source_modified), Some(dest_modified)) => source_modified > dest_modified + tolerance,
+                (Some(source_modified), Some(dest_modified)) => {
+                    source_modified > dest_modified + tolerance
+                }
                 _ => source.modified > dest.modified,
             };
             Ok(source.size != dest.size || newer)
@@ -122,9 +134,16 @@ async fn hash_file(path: &Path) -> Result<blake3::Hash> {
 #[cfg(feature = "checksum")]
 fn classify_error(err: std::io::Error, path: &Path) -> Error {
     match err.kind() {
-        std::io::ErrorKind::NotFound => Error::SourceNotFound { path: path.to_path_buf() },
-        std::io::ErrorKind::PermissionDenied => Error::PermissionDenied { path: path.to_path_buf() },
-        _ => Error::Io { path: path.to_path_buf(), source: err },
+        std::io::ErrorKind::NotFound => Error::SourceNotFound {
+            path: path.to_path_buf(),
+        },
+        std::io::ErrorKind::PermissionDenied => Error::PermissionDenied {
+            path: path.to_path_buf(),
+        },
+        _ => Error::Io {
+            path: path.to_path_buf(),
+            source: err,
+        },
     }
 }
 
@@ -151,7 +170,14 @@ mod tests {
         touch(&source.path().join("a.txt"), b"same", t);
         touch(&dest.path().join("a.txt"), b"same", t);
 
-        let plan = diff(source.path(), dest.path(), DiffStrategy::SizeAndModifiedTime, Duration::ZERO).await.unwrap();
+        let plan = diff(
+            source.path(),
+            dest.path(),
+            DiffStrategy::SizeAndModifiedTime,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
 
         assert!(plan.to_copy.is_empty());
         assert!(plan.to_delete.is_empty());
@@ -165,13 +191,26 @@ mod tests {
         fs::write(source.path().join("only_source.txt"), b"x").unwrap();
         fs::write(dest.path().join("only_dest.txt"), b"y").unwrap();
 
-        let plan = diff(source.path(), dest.path(), DiffStrategy::SizeAndModifiedTime, Duration::ZERO).await.unwrap();
+        let plan = diff(
+            source.path(),
+            dest.path(),
+            DiffStrategy::SizeAndModifiedTime,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(plan.to_copy.len(), 1);
-        assert_eq!(plan.to_copy[0].relative_path, PathBuf::from("only_source.txt"));
+        assert_eq!(
+            plan.to_copy[0].relative_path,
+            PathBuf::from("only_source.txt")
+        );
 
         assert_eq!(plan.to_delete.len(), 1);
-        assert_eq!(plan.to_delete[0].relative_path, PathBuf::from("only_dest.txt"));
+        assert_eq!(
+            plan.to_delete[0].relative_path,
+            PathBuf::from("only_dest.txt")
+        );
     }
 
     #[tokio::test]
@@ -188,7 +227,14 @@ mod tests {
         touch(&source.path().join("unchanged.txt"), b"1234", older);
         touch(&dest.path().join("unchanged.txt"), b"1234", older);
 
-        let plan = diff(source.path(), dest.path(), DiffStrategy::SizeAndModifiedTime, Duration::ZERO).await.unwrap();
+        let plan = diff(
+            source.path(),
+            dest.path(),
+            DiffStrategy::SizeAndModifiedTime,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(plan.to_copy.len(), 1);
         assert_eq!(plan.to_copy[0].relative_path, PathBuf::from("newer.txt"));
@@ -204,14 +250,26 @@ mod tests {
         // A source mtime 900ms newer than dest — real, but smaller than a
         // FAT/exFAT-style 2-second tolerance would ever be able to
         // represent in the first place.
-        touch(&source.path().join("a.txt"), b"same size", base + Duration::from_millis(900));
+        touch(
+            &source.path().join("a.txt"),
+            b"same size",
+            base + Duration::from_millis(900),
+        );
         touch(&dest.path().join("a.txt"), b"same size", base);
 
-        let plan = diff(source.path(), dest.path(), DiffStrategy::SizeAndModifiedTime, Duration::from_secs(2))
-            .await
-            .unwrap();
+        let plan = diff(
+            source.path(),
+            dest.path(),
+            DiffStrategy::SizeAndModifiedTime,
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
 
-        assert!(plan.to_copy.is_empty(), "a sub-tolerance mtime difference should not be treated as changed");
+        assert!(
+            plan.to_copy.is_empty(),
+            "a sub-tolerance mtime difference should not be treated as changed"
+        );
     }
 
     #[tokio::test]
@@ -220,14 +278,27 @@ mod tests {
         let dest = tempdir().unwrap();
         let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
 
-        touch(&source.path().join("a.txt"), b"same size", base + Duration::from_secs(5));
+        touch(
+            &source.path().join("a.txt"),
+            b"same size",
+            base + Duration::from_secs(5),
+        );
         touch(&dest.path().join("a.txt"), b"same size", base);
 
-        let plan = diff(source.path(), dest.path(), DiffStrategy::SizeAndModifiedTime, Duration::from_secs(2))
-            .await
-            .unwrap();
+        let plan = diff(
+            source.path(),
+            dest.path(),
+            DiffStrategy::SizeAndModifiedTime,
+            Duration::from_secs(2),
+        )
+        .await
+        .unwrap();
 
-        assert_eq!(plan.to_copy.len(), 1, "a difference larger than the tolerance should still count as changed");
+        assert_eq!(
+            plan.to_copy.len(),
+            1,
+            "a difference larger than the tolerance should still count as changed"
+        );
     }
 
     #[tokio::test]
@@ -236,12 +307,27 @@ mod tests {
         let dest = tempdir().unwrap();
         let base = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
 
-        touch(&source.path().join("a.txt"), b"same size", base + Duration::from_millis(1));
+        touch(
+            &source.path().join("a.txt"),
+            b"same size",
+            base + Duration::from_millis(1),
+        );
         touch(&dest.path().join("a.txt"), b"same size", base);
 
-        let plan = diff(source.path(), dest.path(), DiffStrategy::SizeAndModifiedTime, Duration::ZERO).await.unwrap();
+        let plan = diff(
+            source.path(),
+            dest.path(),
+            DiffStrategy::SizeAndModifiedTime,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
 
-        assert_eq!(plan.to_copy.len(), 1, "with zero tolerance, any newer mtime at all should count as changed");
+        assert_eq!(
+            plan.to_copy.len(),
+            1,
+            "with zero tolerance, any newer mtime at all should count as changed"
+        );
     }
 
     #[cfg(feature = "checksum")]
@@ -255,7 +341,14 @@ mod tests {
         touch(&source.path().join("a.txt"), b"aaaa", t);
         touch(&dest.path().join("a.txt"), b"bbbb", t);
 
-        let plan = diff(source.path(), dest.path(), DiffStrategy::Checksum, Duration::ZERO).await.unwrap();
+        let plan = diff(
+            source.path(),
+            dest.path(),
+            DiffStrategy::Checksum,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(plan.to_copy.len(), 1);
         assert_eq!(plan.to_copy[0].relative_path, PathBuf::from("a.txt"));
@@ -270,19 +363,41 @@ mod tests {
         touch(&source.path().join("unchanged.txt"), b"same", t);
         touch(&dest.path().join("unchanged.txt"), b"same", t);
 
-        touch(&source.path().join("changed.txt"), b"new", SystemTime::UNIX_EPOCH + Duration::from_secs(2_000));
+        touch(
+            &source.path().join("changed.txt"),
+            b"new",
+            SystemTime::UNIX_EPOCH + Duration::from_secs(2_000),
+        );
         touch(&dest.path().join("changed.txt"), b"old", t);
 
         fs::write(source.path().join("added.txt"), b"added").unwrap();
         fs::write(dest.path().join("removed.txt"), b"removed").unwrap();
 
-        let plan = diff(source.path(), dest.path(), DiffStrategy::SizeAndModifiedTime, Duration::ZERO).await.unwrap();
+        let plan = diff(
+            source.path(),
+            dest.path(),
+            DiffStrategy::SizeAndModifiedTime,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
 
-        let mut copied: Vec<_> = plan.to_copy.iter().map(|e| e.relative_path.clone()).collect();
+        let mut copied: Vec<_> = plan
+            .to_copy
+            .iter()
+            .map(|e| e.relative_path.clone())
+            .collect();
         copied.sort();
-        assert_eq!(copied, vec![PathBuf::from("added.txt"), PathBuf::from("changed.txt")]);
+        assert_eq!(
+            copied,
+            vec![PathBuf::from("added.txt"), PathBuf::from("changed.txt")]
+        );
 
-        let mut deleted: Vec<_> = plan.to_delete.iter().map(|e| e.relative_path.clone()).collect();
+        let mut deleted: Vec<_> = plan
+            .to_delete
+            .iter()
+            .map(|e| e.relative_path.clone())
+            .collect();
         deleted.sort();
         assert_eq!(deleted, vec![PathBuf::from("removed.txt")]);
     }
@@ -295,7 +410,14 @@ mod tests {
 
         fs::write(source.path().join("a.txt"), b"a").unwrap();
 
-        let plan = diff(source.path(), &missing_dest, DiffStrategy::SizeAndModifiedTime, Duration::ZERO).await.unwrap();
+        let plan = diff(
+            source.path(),
+            &missing_dest,
+            DiffStrategy::SizeAndModifiedTime,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
 
         assert_eq!(plan.to_copy.len(), 1);
         assert!(plan.to_delete.is_empty());
@@ -311,7 +433,11 @@ mod tests {
 
         let nfc: String = "café.txt".nfc().collect();
         let nfd: String = "café.txt".nfd().collect();
-        assert_ne!(nfc.as_bytes(), nfd.as_bytes(), "test setup: these must start out byte-different");
+        assert_ne!(
+            nfc.as_bytes(),
+            nfd.as_bytes(),
+            "test setup: these must start out byte-different"
+        );
 
         // Source writer preserves NFD (e.g. APFS/HFS+); dest writer
         // normalized to NFC on write (e.g. exFAT) — same content, same
@@ -319,10 +445,23 @@ mod tests {
         touch(&source.path().join(&nfd), b"same", t);
         touch(&dest.path().join(&nfc), b"same", t);
 
-        let plan = diff(source.path(), dest.path(), DiffStrategy::SizeAndModifiedTime, Duration::ZERO).await.unwrap();
+        let plan = diff(
+            source.path(),
+            dest.path(),
+            DiffStrategy::SizeAndModifiedTime,
+            Duration::ZERO,
+        )
+        .await
+        .unwrap();
 
-        assert!(plan.to_copy.is_empty(), "should be matched as the same file, not re-copied");
-        assert!(plan.to_delete.is_empty(), "should be matched as the same file, not deleted as an orphan");
+        assert!(
+            plan.to_copy.is_empty(),
+            "should be matched as the same file, not re-copied"
+        );
+        assert!(
+            plan.to_delete.is_empty(),
+            "should be matched as the same file, not deleted as an orphan"
+        );
     }
 
     #[tokio::test]
@@ -331,7 +470,13 @@ mod tests {
         let dest = tempdir().unwrap();
         let missing_source = source.path().join("does-not-exist");
 
-        let result = diff(&missing_source, dest.path(), DiffStrategy::SizeAndModifiedTime, Duration::ZERO).await;
+        let result = diff(
+            &missing_source,
+            dest.path(),
+            DiffStrategy::SizeAndModifiedTime,
+            Duration::ZERO,
+        )
+        .await;
         assert!(matches!(result, Err(Error::SourceNotFound { .. })));
     }
 }

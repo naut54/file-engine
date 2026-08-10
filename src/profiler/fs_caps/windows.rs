@@ -21,10 +21,17 @@ pub(super) fn probe(path: &Path) -> Result<FilesystemCapabilities> {
     // pattern Microsoft's own docs recommend for this exact call.
     let mut root_buf = [0u16; 261];
     let resolved = unsafe {
-        GetVolumePathNameW(wide_path.as_ptr(), root_buf.as_mut_ptr(), root_buf.len() as u32)
+        GetVolumePathNameW(
+            wide_path.as_ptr(),
+            root_buf.as_mut_ptr(),
+            root_buf.len() as u32,
+        )
     };
     if resolved == 0 {
-        return Err(classify_io_error(std::io::Error::last_os_error(), path.to_path_buf()));
+        return Err(classify_io_error(
+            std::io::Error::last_os_error(),
+            path.to_path_buf(),
+        ));
     }
 
     let mut fs_name_buf = [0u16; 261];
@@ -43,7 +50,10 @@ pub(super) fn probe(path: &Path) -> Result<FilesystemCapabilities> {
         )
     };
     if ok == 0 {
-        return Err(classify_io_error(std::io::Error::last_os_error(), path.to_path_buf()));
+        return Err(classify_io_error(
+            std::io::Error::last_os_error(),
+            path.to_path_buf(),
+        ));
     }
 
     let name = from_wide(&fs_name_buf).to_lowercase();
@@ -73,7 +83,10 @@ pub(super) fn probe(path: &Path) -> Result<FilesystemCapabilities> {
 }
 
 fn to_wide(path: &Path) -> Vec<u16> {
-    path.as_os_str().encode_wide().chain(iter::once(0)).collect()
+    path.as_os_str()
+        .encode_wide()
+        .chain(iter::once(0))
+        .collect()
 }
 
 fn from_wide(buf: &[u16]) -> String {

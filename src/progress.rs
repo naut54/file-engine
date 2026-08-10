@@ -15,10 +15,19 @@ pub enum Progress {
     /// `bytes_total` is `None` for phases with nothing byte-sized to
     /// report (the delete sweeps). Can be emitted more than once per
     /// operation — `sync` emits it once per phase (copy, then delete).
-    Started { bytes_total: Option<u64>, entries_total: usize },
-    EntryStarted { entry: Entry },
-    EntryCompleted { entry: Entry },
-    EntryFailed { entry: Entry },
+    Started {
+        bytes_total: Option<u64>,
+        entries_total: usize,
+    },
+    EntryStarted {
+        entry: Entry,
+    },
+    EntryCompleted {
+        entry: Entry,
+    },
+    EntryFailed {
+        entry: Entry,
+    },
     /// The directory-creation pre-pass (`operations/pipeline.rs`'s
     /// `ensure_directories_exist`), separate from `Started`/`Entry*`
     /// since it operates on `DirEntry`, not `Entry` — carrying only the
@@ -29,9 +38,15 @@ pub enum Progress {
     /// a minute silently creating ~7,700 directories one at a time
     /// before `Started` (for the file-copy phase) was ever emitted —
     /// see dev-docs/design/handle-progress.md.
-    DirectoriesStarted { total: usize },
-    DirectoryCompleted { path: PathBuf },
-    DirectoryFailed { path: PathBuf },
+    DirectoriesStarted {
+        total: usize,
+    },
+    DirectoryCompleted {
+        path: PathBuf,
+    },
+    DirectoryFailed {
+        path: PathBuf,
+    },
 }
 
 /// `Send + Sync + Clone` sender wrapper threaded into every execution
@@ -95,15 +110,24 @@ mod tests {
         let (tx, mut rx) = mpsc::unbounded_channel();
         let reporter = ProgressReporter::new(tx);
 
-        reporter.send(Progress::Started { bytes_total: Some(10), entries_total: 2 });
+        reporter.send(Progress::Started {
+            bytes_total: Some(10),
+            entries_total: 2,
+        });
         reporter.send(Progress::EntryStarted { entry: entry("a") });
         reporter.send(Progress::EntryCompleted { entry: entry("a") });
 
         drop(reporter); // otherwise the last recv() below blocks forever
 
         assert!(matches!(rx.recv().await, Some(Progress::Started { .. })));
-        assert!(matches!(rx.recv().await, Some(Progress::EntryStarted { .. })));
-        assert!(matches!(rx.recv().await, Some(Progress::EntryCompleted { .. })));
+        assert!(matches!(
+            rx.recv().await,
+            Some(Progress::EntryStarted { .. })
+        ));
+        assert!(matches!(
+            rx.recv().await,
+            Some(Progress::EntryCompleted { .. })
+        ));
         assert!(rx.recv().await.is_none());
     }
 }

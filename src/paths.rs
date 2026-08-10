@@ -37,7 +37,11 @@ mod tests {
     fn nfc_and_nfd_forms_of_the_same_name_normalize_identically() {
         let nfc: String = "café".nfc().collect();
         let nfd: String = "café".nfd().collect();
-        assert_ne!(nfc.as_bytes(), nfd.as_bytes(), "test setup: these must start out byte-different");
+        assert_ne!(
+            nfc.as_bytes(),
+            nfd.as_bytes(),
+            "test setup: these must start out byte-different"
+        );
 
         assert_eq!(
             normalize_for_comparison(Path::new(&nfc)),

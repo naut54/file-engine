@@ -43,7 +43,10 @@ async fn main() -> file_engine::Result<()> {
     println!("syncing {source} -> {dest}");
 
     let engine = FileEngine::new();
-    let mut handle = engine.sync(&source, &dest).allow_filesystem_integrity_risk(allow_integrity_risk).start()?;
+    let mut handle = engine
+        .sync(&source, &dest)
+        .allow_filesystem_integrity_risk(allow_integrity_risk)
+        .start()?;
 
     let start = Instant::now();
     let mut completed: usize = 0;
@@ -54,7 +57,10 @@ async fn main() -> file_engine::Result<()> {
     // tracking which phase we're in.
     while let Some(progress) = tokio_stream::StreamExt::next(handle.progress()).await {
         match progress {
-            Progress::Started { bytes_total, entries_total } => match bytes_total {
+            Progress::Started {
+                bytes_total,
+                entries_total,
+            } => match bytes_total {
                 Some(bytes) => println!("started: {entries_total} entries, {bytes} bytes total"),
                 None => println!("started: {entries_total} entries"),
             },
@@ -63,7 +69,10 @@ async fn main() -> file_engine::Result<()> {
             Progress::EntryCompleted { .. } => {
                 completed += 1;
                 if completed % 200 == 0 {
-                    println!("...{completed} entries done ({:?} elapsed)", start.elapsed());
+                    println!(
+                        "...{completed} entries done ({:?} elapsed)",
+                        start.elapsed()
+                    );
                 }
             }
             Progress::EntryFailed { entry } => {
@@ -81,7 +90,11 @@ async fn main() -> file_engine::Result<()> {
     println!();
     println!("done in {elapsed:?}");
 
-    println!("copy phase: succeeded {}, failed {}", sync_outcome.copy.succeeded.len(), sync_outcome.copy.failed.len());
+    println!(
+        "copy phase: succeeded {}, failed {}",
+        sync_outcome.copy.succeeded.len(),
+        sync_outcome.copy.failed.len()
+    );
     for (entry, err) in &sync_outcome.copy.failed {
         println!("  - {}: {err}", entry.relative_path.display());
     }

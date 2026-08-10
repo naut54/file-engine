@@ -103,7 +103,10 @@ fn classify_io_error(err: io::Error, path: PathBuf) -> Error {
     match err.kind() {
         io::ErrorKind::NotFound => Error::SourceNotFound { path },
         io::ErrorKind::PermissionDenied => Error::PermissionDenied { path },
-        io::ErrorKind::StorageFull => Error::NoSpace { needed: 0, available: 0 },
+        io::ErrorKind::StorageFull => Error::NoSpace {
+            needed: 0,
+            available: 0,
+        },
         _ => Error::Io { path, source: err },
     }
 }
@@ -154,7 +157,10 @@ mod tests {
         assert_eq!(workload.small[0].size, 10);
 
         assert_eq!(workload.large.len(), 1);
-        assert_eq!(workload.large[0].relative_path, PathBuf::from("nested").join("large.txt"));
+        assert_eq!(
+            workload.large[0].relative_path,
+            PathBuf::from("nested").join("large.txt")
+        );
         assert_eq!(workload.large[0].size, 1000);
     }
 
@@ -228,7 +234,10 @@ mod tests {
 
         let workload = scan(dir.path(), 256).await.unwrap();
 
-        assert!(workload.directories.iter().any(|d| d.relative_path == PathBuf::new()));
+        assert!(workload
+            .directories
+            .iter()
+            .any(|d| d.relative_path == PathBuf::new()));
     }
 
     #[tokio::test]

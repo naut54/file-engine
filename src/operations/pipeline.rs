@@ -7,8 +7,12 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::{Error, Result};
-use crate::planner::{dispatch, plan, BatchConfig, CopyAction, ErrorStrategy, OperationOutcome, StopReason};
-use crate::profiler::{probe_fs_caps, scan, validate, DirEntry, Entry, FilesystemCapabilities, Workload};
+use crate::planner::{
+    dispatch, plan, BatchConfig, CopyAction, ErrorStrategy, OperationOutcome, StopReason,
+};
+use crate::profiler::{
+    probe_fs_caps, scan, validate, DirEntry, Entry, FilesystemCapabilities, Workload,
+};
 use crate::progress::{Progress, ProgressReporter};
 
 /// Shared orchestration used by both `copy` and `move_path`'s
@@ -84,7 +88,10 @@ pub(crate) async fn run_workload_pipeline(
     // all, only the two directory-focused steps below.
     let directories = std::mem::take(&mut workload.directories);
 
-    let mut outcome = OperationOutcome { failed: validation.rejected_entries, ..OperationOutcome::default() };
+    let mut outcome = OperationOutcome {
+        failed: validation.rejected_entries,
+        ..OperationOutcome::default()
+    };
     let mut directories_failed: Vec<(PathBuf, Error)> = validation
         .rejected_directories
         .into_iter()
@@ -142,14 +149,27 @@ pub(crate) async fn run_workload_pipeline(
     // so reducing the actual number of syscalls issued is what matters,
     // not how they're scheduled.
     let covered = directories_covered_by_files(&workload.small, &workload.large);
-    let dirs_needing_creation: Vec<DirEntry> =
-        directories.iter().filter(|dir| !covered.contains(&dir.relative_path)).cloned().collect();
-    directories_failed.extend(ensure_directories_exist(&dirs_needing_creation, dest, concurrency, &reporter).await);
+    let dirs_needing_creation: Vec<DirEntry> = directories
+        .iter()
+        .filter(|dir| !covered.contains(&dir.relative_path))
+        .cloned()
+        .collect();
+    directories_failed.extend(
+        ensure_directories_exist(&dirs_needing_creation, dest, concurrency, &reporter).await,
+    );
 
     let execution_plan = plan(workload, config);
     let action = CopyAction { overwrite };
-    let dispatch_outcome =
-        dispatch(execution_plan, action, dest, config.error_strategy, concurrency, cancel, reporter).await;
+    let dispatch_outcome = dispatch(
+        execution_plan,
+        action,
+        dest,
+        config.error_strategy,
+        concurrency,
+        cancel,
+        reporter,
+    )
+    .await;
 
     outcome.succeeded = dispatch_outcome.succeeded;
     outcome.failed.extend(dispatch_outcome.failed);
@@ -231,7 +251,9 @@ async fn ensure_directories_exist(
     concurrency: usize,
     reporter: &ProgressReporter,
 ) -> Vec<(PathBuf, Error)> {
-    reporter.send(Progress::DirectoriesStarted { total: directories.len() });
+    reporter.send(Progress::DirectoriesStarted {
+        total: directories.len(),
+    });
 
     let semaphore = Arc::new(Semaphore::new(concurrency.max(1)));
     let failures = Arc::new(Mutex::new(Vec::new()));
@@ -239,7 +261,10 @@ async fn ensure_directories_exist(
 
     for dir in directories {
         let dest_path = dest_path_for(dir, dest_root);
-        let permit = Arc::clone(&semaphore).acquire_owned().await.expect("semaphore closed");
+        let permit = Arc::clone(&semaphore)
+            .acquire_owned()
+            .await
+            .expect("semaphore closed");
         let failures = Arc::clone(&failures);
         let reporter = reporter.clone();
 
@@ -248,8 +273,13 @@ async fn ensure_directories_exist(
             match tokio::fs::create_dir_all(&dest_path).await {
                 Ok(()) => reporter.send(Progress::DirectoryCompleted { path: dest_path }),
                 Err(err) => {
-                    reporter.send(Progress::DirectoryFailed { path: dest_path.clone() });
-                    failures.lock().unwrap().push((dest_path.clone(), classify_error(err, &dest_path)));
+                    reporter.send(Progress::DirectoryFailed {
+                        path: dest_path.clone(),
+                    });
+                    failures
+                        .lock()
+                        .unwrap()
+                        .push((dest_path.clone(), classify_error(err, &dest_path)));
                 }
             }
         });
@@ -260,7 +290,9 @@ async fn ensure_directories_exist(
     }
 
     Arc::try_unwrap(failures)
-        .unwrap_or_else(|_| panic!("ensure_directories_exist: failures has outstanding references after join"))
+        .unwrap_or_else(|_| {
+            panic!("ensure_directories_exist: failures has outstanding references after join")
+        })
         .into_inner()
         .unwrap()
 }
@@ -272,14 +304,19 @@ async fn ensure_directories_exist(
 /// mode doesn't permit writes (e.g. `0o500`) would otherwise lock the
 /// copy out of its own destination if applied first.
 #[cfg(all(unix, feature = "permissions"))]
-async fn apply_directory_permissions(directories: &[DirEntry], dest_root: &Path) -> Vec<(PathBuf, Error)> {
+async fn apply_directory_permissions(
+    directories: &[DirEntry],
+    dest_root: &Path,
+) -> Vec<(PathBuf, Error)> {
     use std::os::unix::fs::PermissionsExt;
 
     let mut failures = Vec::new();
     for dir in directories {
         let Some(mode) = dir.mode else { continue };
         let dest_path = dest_path_for(dir, dest_root);
-        if let Err(err) = tokio::fs::set_permissions(&dest_path, std::fs::Permissions::from_mode(mode)).await {
+        if let Err(err) =
+            tokio::fs::set_permissions(&dest_path, std::fs::Permissions::from_mode(mode)).await
+        {
             failures.push((dest_path.clone(), classify_error(err, &dest_path)));
         }
     }
@@ -290,16 +327,29 @@ async fn apply_directory_permissions(directories: &[DirEntry], dest_root: &Path)
 /// Unix + `permissions`), but needs to exist so the call site above
 /// compiles regardless of feature flags.
 #[cfg(not(all(unix, feature = "permissions")))]
-async fn apply_directory_permissions(_directories: &[DirEntry], _dest_root: &Path) -> Vec<(PathBuf, Error)> {
+async fn apply_directory_permissions(
+    _directories: &[DirEntry],
+    _dest_root: &Path,
+) -> Vec<(PathBuf, Error)> {
     Vec::new()
 }
 
 fn classify_error(err: std::io::Error, path: &Path) -> Error {
     match err.kind() {
-        std::io::ErrorKind::NotFound => Error::SourceNotFound { path: path.to_path_buf() },
-        std::io::ErrorKind::PermissionDenied => Error::PermissionDenied { path: path.to_path_buf() },
-        std::io::ErrorKind::StorageFull => Error::NoSpace { needed: 0, available: 0 },
-        _ => Error::Io { path: path.to_path_buf(), source: err },
+        std::io::ErrorKind::NotFound => Error::SourceNotFound {
+            path: path.to_path_buf(),
+        },
+        std::io::ErrorKind::PermissionDenied => Error::PermissionDenied {
+            path: path.to_path_buf(),
+        },
+        std::io::ErrorKind::StorageFull => Error::NoSpace {
+            needed: 0,
+            available: 0,
+        },
+        _ => Error::Io {
+            path: path.to_path_buf(),
+            source: err,
+        },
     }
 }
 
@@ -341,7 +391,10 @@ mod tests {
 
         assert_eq!(outcome.succeeded.len(), 1);
         assert!(outcome.failed.is_empty());
-        assert_eq!(fs::read(dest_dir.path().join("file.txt")).unwrap(), b"hello world");
+        assert_eq!(
+            fs::read(dest_dir.path().join("file.txt")).unwrap(),
+            b"hello world"
+        );
     }
 
     #[tokio::test]
@@ -355,7 +408,11 @@ mod tests {
         fs::create_dir_all(src_dir.path().join("nested")).unwrap();
         fs::write(src_dir.path().join("a.txt"), vec![1u8; 10]).unwrap();
         fs::write(src_dir.path().join("b.txt"), vec![2u8; 10]).unwrap();
-        fs::write(src_dir.path().join("nested").join("big.bin"), vec![3u8; 1000]).unwrap();
+        fs::write(
+            src_dir.path().join("nested").join("big.bin"),
+            vec![3u8; 1000],
+        )
+        .unwrap();
 
         let mut config = BatchConfig::default();
         config.max_bytes_per_batch = 1024;
@@ -378,8 +435,14 @@ mod tests {
         assert_eq!(outcome.succeeded.len(), 3);
         assert!(outcome.failed.is_empty());
 
-        assert_eq!(fs::read(dest_dir.path().join("a.txt")).unwrap(), vec![1u8; 10]);
-        assert_eq!(fs::read(dest_dir.path().join("b.txt")).unwrap(), vec![2u8; 10]);
+        assert_eq!(
+            fs::read(dest_dir.path().join("a.txt")).unwrap(),
+            vec![1u8; 10]
+        );
+        assert_eq!(
+            fs::read(dest_dir.path().join("b.txt")).unwrap(),
+            vec![2u8; 10]
+        );
         assert_eq!(
             fs::read(dest_dir.path().join("nested").join("big.bin")).unwrap(),
             vec![3u8; 1000]
@@ -415,7 +478,11 @@ mod tests {
         .unwrap();
 
         assert!(outcome.directories_failed.is_empty());
-        let dest_subdir_mode = fs::metadata(dest_dir.path().join("nested")).unwrap().permissions().mode() & 0o777;
+        let dest_subdir_mode = fs::metadata(dest_dir.path().join("nested"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(dest_subdir_mode, 0o700);
     }
 
@@ -479,9 +546,19 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(outcome.directories_failed.is_empty(), "pass never ran, so nothing failed either");
-        let dest_subdir_mode = fs::metadata(dest_dir.path().join("nested")).unwrap().permissions().mode() & 0o777;
-        assert_ne!(dest_subdir_mode, 0o700, "directory pass should not have run");
+        assert!(
+            outcome.directories_failed.is_empty(),
+            "pass never ran, so nothing failed either"
+        );
+        let dest_subdir_mode = fs::metadata(dest_dir.path().join("nested"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_ne!(
+            dest_subdir_mode, 0o700,
+            "directory pass should not have run"
+        );
     }
 
     #[cfg(all(unix, feature = "permissions"))]
@@ -520,13 +597,20 @@ mod tests {
         .unwrap();
 
         assert!(outcome.stopped_early.is_some());
-        assert!(outcome.directories_failed.is_empty(), "pass should never have been attempted");
+        assert!(
+            outcome.directories_failed.is_empty(),
+            "pass should never have been attempted"
+        );
 
         // Whether `nested/` even got created at dest depends on dispatch
         // ordering (AbortOnError may stop before its file is attempted at
         // all) — only assert on its mode if it exists.
         if let Ok(metadata) = fs::metadata(dest_dir.path().join("nested")) {
-            assert_ne!(metadata.permissions().mode() & 0o777, 0o700, "directory pass should not have run");
+            assert_ne!(
+                metadata.permissions().mode() & 0o777,
+                0o700,
+                "directory pass should not have run"
+            );
         }
     }
 
@@ -554,7 +638,11 @@ mod tests {
         assert_eq!(failures.len(), 1);
         assert!(matches!(failures[0].1, Error::SourceNotFound { .. }));
 
-        let real_mode = fs::metadata(dest_dir.path().join("real")).unwrap().permissions().mode() & 0o777;
+        let real_mode = fs::metadata(dest_dir.path().join("real"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
         assert_eq!(real_mode, 0o700);
     }
 
@@ -593,9 +681,24 @@ mod tests {
 
         let workload = Workload {
             small: vec![
-                Entry { path: shared_source.clone(), relative_path: PathBuf::from("Report.txt"), size: 6, modified: None },
-                Entry { path: shared_source, relative_path: PathBuf::from("report.txt"), size: 6, modified: None },
-                Entry { path: unrelated_source, relative_path: PathBuf::from("unrelated.txt"), size: 5, modified: None },
+                Entry {
+                    path: shared_source.clone(),
+                    relative_path: PathBuf::from("Report.txt"),
+                    size: 6,
+                    modified: None,
+                },
+                Entry {
+                    path: shared_source,
+                    relative_path: PathBuf::from("report.txt"),
+                    size: 6,
+                    modified: None,
+                },
+                Entry {
+                    path: unrelated_source,
+                    relative_path: PathBuf::from("unrelated.txt"),
+                    size: 5,
+                    modified: None,
+                },
             ],
             large: vec![],
             directories: vec![],
@@ -618,13 +721,19 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.succeeded.len(), 1);
-        assert_eq!(outcome.succeeded[0].relative_path, PathBuf::from("unrelated.txt"));
+        assert_eq!(
+            outcome.succeeded[0].relative_path,
+            PathBuf::from("unrelated.txt")
+        );
         assert_eq!(outcome.failed.len(), 2);
         for (_, err) in &outcome.failed {
             assert!(matches!(err, Error::CaseCollision { .. }));
         }
         assert_eq!(outcome.stopped_early, None);
-        assert_eq!(fs::read(dest_dir.path().join("unrelated.txt")).unwrap(), b"three");
+        assert_eq!(
+            fs::read(dest_dir.path().join("unrelated.txt")).unwrap(),
+            b"three"
+        );
     }
 
     #[tokio::test]
@@ -641,15 +750,33 @@ mod tests {
 
         let workload = Workload {
             small: vec![
-                Entry { path: shared_source.clone(), relative_path: PathBuf::from("Report.txt"), size: 6, modified: None },
-                Entry { path: shared_source, relative_path: PathBuf::from("report.txt"), size: 6, modified: None },
-                Entry { path: unrelated_source, relative_path: PathBuf::from("unrelated.txt"), size: 5, modified: None },
+                Entry {
+                    path: shared_source.clone(),
+                    relative_path: PathBuf::from("Report.txt"),
+                    size: 6,
+                    modified: None,
+                },
+                Entry {
+                    path: shared_source,
+                    relative_path: PathBuf::from("report.txt"),
+                    size: 6,
+                    modified: None,
+                },
+                Entry {
+                    path: unrelated_source,
+                    relative_path: PathBuf::from("unrelated.txt"),
+                    size: 5,
+                    modified: None,
+                },
             ],
             large: vec![],
             directories: vec![],
         };
 
-        let config = BatchConfig { error_strategy: ErrorStrategy::AbortOnError, ..BatchConfig::default() };
+        let config = BatchConfig {
+            error_strategy: ErrorStrategy::AbortOnError,
+            ..BatchConfig::default()
+        };
 
         let dest_caps = probe_fs_caps(dest_dir.path()).await.unwrap();
         let outcome = run_workload_pipeline(
@@ -667,9 +794,15 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(outcome.succeeded.is_empty(), "nothing should have been dispatched at all");
+        assert!(
+            outcome.succeeded.is_empty(),
+            "nothing should have been dispatched at all"
+        );
         assert_eq!(outcome.failed.len(), 2);
-        assert_eq!(outcome.stopped_early, Some(crate::planner::StopReason::AbortOnError));
+        assert_eq!(
+            outcome.stopped_early,
+            Some(crate::planner::StopReason::AbortOnError)
+        );
         assert!(
             !dest_dir.path().join("unrelated.txt").exists(),
             "an unrelated valid entry should not have been copied either — abort happens before dispatch starts"
@@ -715,7 +848,10 @@ mod tests {
         .await;
 
         assert!(matches!(result, Err(Error::FilesystemIntegrityRisk { .. })));
-        assert!(!dest_dir.path().join("a.txt").exists(), "nothing should have been written");
+        assert!(
+            !dest_dir.path().join("a.txt").exists(),
+            "nothing should have been written"
+        );
     }
 
     #[tokio::test]
@@ -749,9 +885,21 @@ mod tests {
         let dest_dir = tempdir().unwrap();
 
         let dirs = vec![
-            crate::profiler::DirEntry { path: PathBuf::from("irrelevant"), relative_path: PathBuf::from("a"), mode: None },
-            crate::profiler::DirEntry { path: PathBuf::from("irrelevant"), relative_path: PathBuf::from("b"), mode: None },
-            crate::profiler::DirEntry { path: PathBuf::from("irrelevant"), relative_path: PathBuf::from("c"), mode: None },
+            crate::profiler::DirEntry {
+                path: PathBuf::from("irrelevant"),
+                relative_path: PathBuf::from("a"),
+                mode: None,
+            },
+            crate::profiler::DirEntry {
+                path: PathBuf::from("irrelevant"),
+                relative_path: PathBuf::from("b"),
+                mode: None,
+            },
+            crate::profiler::DirEntry {
+                path: PathBuf::from("irrelevant"),
+                relative_path: PathBuf::from("c"),
+                mode: None,
+            },
         ];
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -770,9 +918,18 @@ mod tests {
             events.push(event);
         }
 
-        assert!(matches!(events[0], Progress::DirectoriesStarted { total: 3 }));
-        let completed = events.iter().filter(|e| matches!(e, Progress::DirectoryCompleted { .. })).count();
-        assert_eq!(completed, 3, "one DirectoryCompleted per directory, regardless of concurrency");
+        assert!(matches!(
+            events[0],
+            Progress::DirectoriesStarted { total: 3 }
+        ));
+        let completed = events
+            .iter()
+            .filter(|e| matches!(e, Progress::DirectoryCompleted { .. }))
+            .count();
+        assert_eq!(
+            completed, 3,
+            "one DirectoryCompleted per directory, regardless of concurrency"
+        );
     }
 
     #[cfg(unix)]
@@ -791,7 +948,11 @@ mod tests {
                 relative_path: PathBuf::from("locked/nested"),
                 mode: None,
             },
-            crate::profiler::DirEntry { path: PathBuf::from("irrelevant"), relative_path: PathBuf::from("ok"), mode: None },
+            crate::profiler::DirEntry {
+                path: PathBuf::from("irrelevant"),
+                relative_path: PathBuf::from("ok"),
+                mode: None,
+            },
         ];
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
@@ -802,14 +963,21 @@ mod tests {
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(failures.len(), 1);
-        assert!(dest_dir.path().join("ok").is_dir(), "the other directory should still have been created");
+        assert!(
+            dest_dir.path().join("ok").is_dir(),
+            "the other directory should still have been created"
+        );
 
         let mut events = Vec::new();
         while let Some(event) = rx.recv().await {
             events.push(event);
         }
-        assert!(events.iter().any(|e| matches!(e, Progress::DirectoryFailed { .. })));
-        assert!(events.iter().any(|e| matches!(e, Progress::DirectoryCompleted { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Progress::DirectoryFailed { .. })));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, Progress::DirectoryCompleted { .. })));
     }
 
     #[test]
@@ -825,7 +993,10 @@ mod tests {
 
         assert!(covered.contains(&PathBuf::from("a/b")));
         assert!(covered.contains(&PathBuf::from("a")));
-        assert!(covered.contains(&PathBuf::new()), "the root itself is a proper ancestor too");
+        assert!(
+            covered.contains(&PathBuf::new()),
+            "the root itself is a proper ancestor too"
+        );
         assert_eq!(covered.len(), 3);
     }
 
@@ -874,7 +1045,12 @@ mod tests {
         .unwrap();
 
         assert!(outcome.failed.is_empty());
-        assert!(dest_dir.path().join("a").join("b").join("file.txt").exists());
+        assert!(dest_dir
+            .path()
+            .join("a")
+            .join("b")
+            .join("file.txt")
+            .exists());
         assert!(dest_dir.path().join("empty_dir").is_dir());
 
         let mut events = Vec::new();
@@ -883,7 +1059,13 @@ mod tests {
         }
         let directories_started = events
             .iter()
-            .find_map(|e| if let Progress::DirectoriesStarted { total } = e { Some(*total) } else { None })
+            .find_map(|e| {
+                if let Progress::DirectoriesStarted { total } = e {
+                    Some(*total)
+                } else {
+                    None
+                }
+            })
             .expect("DirectoriesStarted should have been emitted");
 
         assert_eq!(

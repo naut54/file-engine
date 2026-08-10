@@ -101,7 +101,9 @@ impl SyncBuilder {
         let reporter = ProgressReporter::new(tx);
 
         let concurrency = self.concurrency.unwrap_or_else(default_concurrency);
-        let threshold = self.small_file_threshold.unwrap_or(DEFAULT_SMALL_FILE_THRESHOLD);
+        let threshold = self
+            .small_file_threshold
+            .unwrap_or(DEFAULT_SMALL_FILE_THRESHOLD);
         let cancel_for_task = cancel.clone();
 
         let join_handle = tokio::spawn(async move {
@@ -205,18 +207,27 @@ async fn delete_sweep(
 ) -> OperationOutcome {
     let mut outcome = OperationOutcome::default();
 
-    reporter.send(Progress::Started { bytes_total: None, entries_total: entries.len() });
+    reporter.send(Progress::Started {
+        bytes_total: None,
+        entries_total: entries.len(),
+    });
 
     for entry in entries {
-        reporter.send(Progress::EntryStarted { entry: entry.clone() });
+        reporter.send(Progress::EntryStarted {
+            entry: entry.clone(),
+        });
 
         match remove_path(&entry.path).await {
             Ok(()) => {
-                reporter.send(Progress::EntryCompleted { entry: entry.clone() });
+                reporter.send(Progress::EntryCompleted {
+                    entry: entry.clone(),
+                });
                 outcome.succeeded.push(entry);
             }
             Err(err) => {
-                reporter.send(Progress::EntryFailed { entry: entry.clone() });
+                reporter.send(Progress::EntryFailed {
+                    entry: entry.clone(),
+                });
 
                 let fatal = err.is_fatal();
                 let reason = if fatal {
@@ -224,7 +235,9 @@ async fn delete_sweep(
                 } else {
                     match error_strategy {
                         ErrorStrategy::ContinueAndCollect => None,
-                        ErrorStrategy::AbortOnError | ErrorStrategy::Undo => Some(StopReason::AbortOnError),
+                        ErrorStrategy::AbortOnError | ErrorStrategy::Undo => {
+                            Some(StopReason::AbortOnError)
+                        }
                     }
                 };
 
@@ -253,10 +266,20 @@ async fn remove_path(path: &Path) -> Result<()> {
 
 fn classify_error(err: io::Error, path: &Path) -> Error {
     match err.kind() {
-        io::ErrorKind::NotFound => Error::SourceNotFound { path: path.to_path_buf() },
-        io::ErrorKind::PermissionDenied => Error::PermissionDenied { path: path.to_path_buf() },
-        io::ErrorKind::StorageFull => Error::NoSpace { needed: 0, available: 0 },
-        _ => Error::Io { path: path.to_path_buf(), source: err },
+        io::ErrorKind::NotFound => Error::SourceNotFound {
+            path: path.to_path_buf(),
+        },
+        io::ErrorKind::PermissionDenied => Error::PermissionDenied {
+            path: path.to_path_buf(),
+        },
+        io::ErrorKind::StorageFull => Error::NoSpace {
+            needed: 0,
+            available: 0,
+        },
+        _ => Error::Io {
+            path: path.to_path_buf(),
+            source: err,
+        },
     }
 }
 
@@ -293,11 +316,17 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.copy.succeeded.len(), 1);
-        assert_eq!(outcome.copy.succeeded[0].relative_path, PathBuf::from("new.txt"));
+        assert_eq!(
+            outcome.copy.succeeded[0].relative_path,
+            PathBuf::from("new.txt")
+        );
         assert!(outcome.copy.failed.is_empty());
 
         assert_eq!(outcome.delete.succeeded.len(), 1);
-        assert_eq!(outcome.delete.succeeded[0].relative_path, PathBuf::from("orphan.txt"));
+        assert_eq!(
+            outcome.delete.succeeded[0].relative_path,
+            PathBuf::from("orphan.txt")
+        );
         assert!(outcome.delete.failed.is_empty());
 
         assert_eq!(fs::read(dest.path().join("new.txt")).unwrap(), b"new");
@@ -333,7 +362,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(outcome.copy.failed.len(), 1);
-        assert_eq!(outcome.copy.failed[0].0.relative_path, PathBuf::from("conflict.txt"));
+        assert_eq!(
+            outcome.copy.failed[0].0.relative_path,
+            PathBuf::from("conflict.txt")
+        );
 
         // Under ContinueAndCollect (the default), the copy phase doesn't
         // stop early even with a per-entry failure, so the delete phase
@@ -393,11 +425,26 @@ mod tests {
         let b = dest.path().join("b.txt");
         fs::write(&b, b"b").unwrap();
 
-        let entry_a = Entry { path: a.clone(), relative_path: PathBuf::from("locked/a.txt"), size: 1, modified: None };
-        let entry_b = Entry { path: b.clone(), relative_path: PathBuf::from("b.txt"), size: 1, modified: None };
+        let entry_a = Entry {
+            path: a.clone(),
+            relative_path: PathBuf::from("locked/a.txt"),
+            size: 1,
+            modified: None,
+        };
+        let entry_b = Entry {
+            path: b.clone(),
+            relative_path: PathBuf::from("b.txt"),
+            size: 1,
+            modified: None,
+        };
 
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o555)).unwrap();
-        let outcome = delete_sweep(vec![entry_a, entry_b], ErrorStrategy::ContinueAndCollect, ProgressReporter::noop()).await;
+        let outcome = delete_sweep(
+            vec![entry_a, entry_b],
+            ErrorStrategy::ContinueAndCollect,
+            ProgressReporter::noop(),
+        )
+        .await;
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(outcome.failed.len(), 1);
@@ -421,16 +468,34 @@ mod tests {
         let b = dest.path().join("b.txt");
         fs::write(&b, b"b").unwrap();
 
-        let entry_a = Entry { path: a.clone(), relative_path: PathBuf::from("locked/a.txt"), size: 1, modified: None };
-        let entry_b = Entry { path: b.clone(), relative_path: PathBuf::from("b.txt"), size: 1, modified: None };
+        let entry_a = Entry {
+            path: a.clone(),
+            relative_path: PathBuf::from("locked/a.txt"),
+            size: 1,
+            modified: None,
+        };
+        let entry_b = Entry {
+            path: b.clone(),
+            relative_path: PathBuf::from("b.txt"),
+            size: 1,
+            modified: None,
+        };
 
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o555)).unwrap();
-        let outcome = delete_sweep(vec![entry_a, entry_b], ErrorStrategy::AbortOnError, ProgressReporter::noop()).await;
+        let outcome = delete_sweep(
+            vec![entry_a, entry_b],
+            ErrorStrategy::AbortOnError,
+            ProgressReporter::noop(),
+        )
+        .await;
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(outcome.stopped_early, Some(StopReason::AbortOnError));
         assert!(a.exists());
-        assert!(b.exists(), "b comes after the triggering failure and should never be attempted");
+        assert!(
+            b.exists(),
+            "b comes after the triggering failure and should never be attempted"
+        );
     }
 
     #[cfg(unix)]
@@ -446,11 +511,26 @@ mod tests {
         let b = dest.path().join("b.txt");
         fs::write(&b, b"b").unwrap();
 
-        let entry_a = Entry { path: a.clone(), relative_path: PathBuf::from("locked/a.txt"), size: 1, modified: None };
-        let entry_b = Entry { path: b.clone(), relative_path: PathBuf::from("b.txt"), size: 1, modified: None };
+        let entry_a = Entry {
+            path: a.clone(),
+            relative_path: PathBuf::from("locked/a.txt"),
+            size: 1,
+            modified: None,
+        };
+        let entry_b = Entry {
+            path: b.clone(),
+            relative_path: PathBuf::from("b.txt"),
+            size: 1,
+            modified: None,
+        };
 
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o555)).unwrap();
-        let outcome = delete_sweep(vec![entry_a, entry_b], ErrorStrategy::Undo, ProgressReporter::noop()).await;
+        let outcome = delete_sweep(
+            vec![entry_a, entry_b],
+            ErrorStrategy::Undo,
+            ProgressReporter::noop(),
+        )
+        .await;
         fs::set_permissions(&locked_dir, fs::Permissions::from_mode(0o755)).unwrap();
 
         assert_eq!(outcome.stopped_early, Some(StopReason::AbortOnError));
@@ -466,8 +546,16 @@ mod tests {
 
         fs::write(source.path().join("same.txt"), b"same").unwrap();
         fs::write(dest.path().join("same.txt"), b"same").unwrap();
-        filetime::set_file_mtime(source.path().join("same.txt"), filetime::FileTime::from_system_time(t)).unwrap();
-        filetime::set_file_mtime(dest.path().join("same.txt"), filetime::FileTime::from_system_time(t)).unwrap();
+        filetime::set_file_mtime(
+            source.path().join("same.txt"),
+            filetime::FileTime::from_system_time(t),
+        )
+        .unwrap();
+        filetime::set_file_mtime(
+            dest.path().join("same.txt"),
+            filetime::FileTime::from_system_time(t),
+        )
+        .unwrap();
 
         let outcome = sync(
             source.path(),

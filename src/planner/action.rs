@@ -23,8 +23,16 @@ use crate::profiler::Entry;
 /// dependency (`trait_variant`). Boxing costs one small heap allocation
 /// per entry, which is negligible next to the I/O each call performs.
 pub(crate) trait EntryAction: Send + Sync {
-    fn execute<'a>(&'a self, entry: &'a Entry, dest_root: &'a Path) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
-    fn undo<'a>(&'a self, entry: &'a Entry, dest_root: &'a Path) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+    fn execute<'a>(
+        &'a self,
+        entry: &'a Entry,
+        dest_root: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+    fn undo<'a>(
+        &'a self,
+        entry: &'a Entry,
+        dest_root: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
 }
 
 #[derive(Debug, Clone)]
@@ -33,7 +41,11 @@ pub(crate) struct CopyAction {
 }
 
 impl EntryAction for CopyAction {
-    fn execute<'a>(&'a self, entry: &'a Entry, dest_root: &'a Path) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    fn execute<'a>(
+        &'a self,
+        entry: &'a Entry,
+        dest_root: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let dest_path = dest_root.join(&entry.relative_path);
 
@@ -68,7 +80,11 @@ impl EntryAction for CopyAction {
         })
     }
 
-    fn undo<'a>(&'a self, entry: &'a Entry, dest_root: &'a Path) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    fn undo<'a>(
+        &'a self,
+        entry: &'a Entry,
+        dest_root: &'a Path,
+    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
         Box::pin(async move {
             let dest_path = dest_root.join(&entry.relative_path);
             match tokio::fs::remove_file(&dest_path).await {
@@ -86,10 +102,20 @@ impl EntryAction for CopyAction {
 /// 0 rather than fabricated.
 fn classify_error(err: io::Error, path: &Path, needed: u64) -> Error {
     match err.kind() {
-        io::ErrorKind::NotFound => Error::SourceNotFound { path: path.to_path_buf() },
-        io::ErrorKind::PermissionDenied => Error::PermissionDenied { path: path.to_path_buf() },
-        io::ErrorKind::StorageFull => Error::NoSpace { needed, available: 0 },
-        _ => Error::Io { path: path.to_path_buf(), source: err },
+        io::ErrorKind::NotFound => Error::SourceNotFound {
+            path: path.to_path_buf(),
+        },
+        io::ErrorKind::PermissionDenied => Error::PermissionDenied {
+            path: path.to_path_buf(),
+        },
+        io::ErrorKind::StorageFull => Error::NoSpace {
+            needed,
+            available: 0,
+        },
+        _ => Error::Io {
+            path: path.to_path_buf(),
+            source: err,
+        },
     }
 }
 
@@ -103,7 +129,12 @@ mod tests {
     use super::*;
 
     fn entry(path: PathBuf, relative_path: PathBuf, size: u64) -> Entry {
-        Entry { path, relative_path, size, modified: None }
+        Entry {
+            path,
+            relative_path,
+            size,
+            modified: None,
+        }
     }
 
     #[tokio::test]
