@@ -123,6 +123,13 @@ mod tests {
     use super::*;
     use crate::watch_event::WatchEventKind;
 
+    /// Upper bound on any single wait for an expected event. Only ever
+    /// reached when a test is genuinely failing (once
+    /// `await_watcher_ready` has returned, events arrive in
+    /// milliseconds), so it's set generously rather than tuned — a tight
+    /// bound here buys nothing but flakiness on a loaded CI runner.
+    const EVENT_TIMEOUT: Duration = Duration::from_secs(10);
+
     /// `notify`'s backends are asynchronous relative to the filesystem
     /// operation that triggers them (inotify/FSEvents/etc. all deliver
     /// events after some OS-determined delay) — poll for the expected
@@ -132,7 +139,7 @@ mod tests {
         handle: &mut WatchHandle,
         mut predicate: impl FnMut(&WatchEvent) -> bool,
     ) -> WatchEvent {
-        tokio::time::timeout(Duration::from_secs(5), async {
+        tokio::time::timeout(EVENT_TIMEOUT, async {
             loop {
                 let event = handle.events().next().await.expect("event stream ended unexpectedly");
                 if predicate(&event) {
@@ -142,6 +149,61 @@ mod tests {
         })
         .await
         .expect("timed out waiting for expected event")
+    }
+
+    /// Blocks until `handle` is demonstrably delivering events for
+    /// `base`, by writing a throwaway probe file there until an event
+    /// for it comes back.
+    ///
+    /// `WatchBuilder::start()` returns before the underlying watcher has
+    /// finished registering with the OS — `build_watcher` runs on a
+    /// `spawn_blocking` thread, and the macOS backend additionally hands
+    /// the stream to its own run loop. A filesystem change made inside
+    /// that window is not reported late; it is never reported at all,
+    /// because these APIs only deliver events that occur after
+    /// registration completes. So the triggering change has to be
+    /// *retried* until one is observed — sleeping first and hoping
+    /// cannot be made reliable, only less likely to fail. These tests
+    /// previously slept 100ms, which held when they ran alone (the whole
+    /// watch module took 0.55s) but failed constantly under `cargo
+    /// test`'s parallelism, where registration loses the race against
+    /// the other ~140 tests for CPU: the missed change meant no event
+    /// ever arrived and the test sat out its full timeout.
+    async fn await_watcher_ready(handle: &mut WatchHandle, base: &Path) {
+        // Deliberately left on disk afterward: removing it would emit
+        // further events into the stream every caller then has to filter
+        // out, and the enclosing `TempDir` cleans it up regardless. Its
+        // name is distinct from every path the tests assert on, so their
+        // path predicates skip it (and its repeat writes below) already.
+        let probe = base.join(".watcher-readiness-probe");
+
+        tokio::time::timeout(EVENT_TIMEOUT, async {
+            loop {
+                fs::write(&probe, b"probe").unwrap();
+
+                // Bounded per attempt rather than waiting on the whole
+                // budget at once: if this write landed before
+                // registration completed, no event for it is ever
+                // coming, and the only way forward is another write.
+                let deadline = tokio::time::Instant::now() + Duration::from_millis(100);
+                let observed = tokio::time::timeout_at(deadline, async {
+                    loop {
+                        let event =
+                            handle.events().next().await.expect("event stream ended before the watcher was ready");
+                        if event.paths.contains(&probe) {
+                            return;
+                        }
+                    }
+                })
+                .await;
+
+                if observed.is_ok() {
+                    return;
+                }
+            }
+        })
+        .await
+        .expect("watcher never started delivering events");
     }
 
     /// On macOS, `/var` (where `tempfile` puts its directories) is a
@@ -160,10 +222,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let base = canonical_dir(&dir);
         let mut handle = WatchBuilder::new(&base).start().unwrap();
-
-        // Give the watcher a moment to finish registering before the
-        // triggering change happens.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        await_watcher_ready(&mut handle, &base).await;
 
         let file = base.join("a.txt");
         fs::write(&file, b"hello").unwrap();
@@ -183,7 +242,7 @@ mod tests {
         fs::write(&file, b"hello").unwrap();
 
         let mut handle = WatchBuilder::new(&base).start().unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        await_watcher_ready(&mut handle, &base).await;
 
         fs::write(&file, b"changed").unwrap();
         let modified = next_matching(&mut handle, |e| e.kind == WatchEventKind::Modified && e.paths.contains(&file)).await;
@@ -205,7 +264,7 @@ mod tests {
         fs::create_dir(&subdir).unwrap();
 
         let mut handle = WatchBuilder::new(&base).recursive(true).start().unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        await_watcher_ready(&mut handle, &base).await;
 
         let file = subdir.join("a.txt");
         fs::write(&file, b"hello").unwrap();
@@ -224,8 +283,11 @@ mod tests {
         let subdir = base.join("nested");
         fs::create_dir(&subdir).unwrap();
 
+        // Probes the top level, which is watched in both recursive modes
+        // — so this proves readiness without depending on the very
+        // behavior under test.
         let mut handle = WatchBuilder::new(&base).recursive(false).start().unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        await_watcher_ready(&mut handle, &base).await;
 
         let file = subdir.join("a.txt");
         fs::write(&file, b"hello").unwrap();
@@ -245,8 +307,13 @@ mod tests {
     #[tokio::test]
     async fn cancel_stops_further_events_and_resolves_ok() {
         let dir = tempdir().unwrap();
-        let handle = WatchBuilder::new(dir.path()).start().unwrap();
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        let base = canonical_dir(&dir);
+        // Not strictly required to reach `Ok` — cancelling before the
+        // watcher even registers still resolves that way — but waiting
+        // means this actually exercises cancelling a *live* watcher,
+        // which is the case worth covering.
+        let mut handle = WatchBuilder::new(&base).start().unwrap();
+        await_watcher_ready(&mut handle, &base).await;
 
         handle.cancel();
         let result = handle.await;
