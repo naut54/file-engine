@@ -115,14 +115,42 @@ fn classify_io_error(err: io::Error, path: PathBuf) -> Error {
     }
 }
 
+/// Case sensitivity derived from the filesystem name, for the platforms
+/// that have no usable per-volume query. macOS has one worth preferring
+/// (`pathconf(_PC_CASE_SENSITIVE)`), so this is only for Linux and
+/// Windows.
+///
+/// Windows *looks* like it has one — `GetVolumeInformationW`'s
+/// `FILE_CASE_SENSITIVE_SEARCH` — but that flag reports whether the
+/// filesystem *supports* case-sensitive names, not how the volume
+/// resolves them. NTFS supports POSIX case-sensitive semantics and sets
+/// it, while the Win32 layer still resolves case-insensitively by
+/// default, so reading it marked every NTFS destination case-sensitive
+/// and silently disabled the case-collision check on the one platform
+/// whose naming rules this crate cares most about.
+///
+/// The FAT/exFAT/NTFS family is case-insensitive; everything else the
+/// match table below names is case-sensitive. Unrecognized filesystems
+/// come back case-sensitive, which is the conservative direction here:
+/// it means no collision is reported rather than a spurious one against
+/// a filesystem this crate has no evidence about.
+// Unused in the macOS lib target, which prefers `pathconf` — but still
+// compiled and unit-tested there, since the table itself is
+// platform-independent and worth covering everywhere.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
+fn case_sensitive_by_name(name: &str) -> bool {
+    !matches!(
+        name,
+        "msdos" | "vfat" | "fat" | "fat16" | "fat32" | "exfat" | "ntfs"
+    )
+}
+
 /// Filesystem-type classification shared by the unix and windows
-/// probes: given the OS-reported filesystem name (already
-/// lowercased), what does everything except case-sensitivity look
-/// like. Case-sensitivity is deliberately not decided here — it comes
-/// from a platform-specific call (`pathconf`/`GetVolumeInformationW`),
-/// not from name matching, since it can vary per-volume even for the
-/// same filesystem type (e.g. an explicitly case-sensitive APFS
-/// volume).
+/// probes: given the OS-reported filesystem name (already lowercased),
+/// what does everything except case-sensitivity look like.
+/// Case-sensitivity is decided separately, by `pathconf` on macOS (it
+/// can vary per-volume there, e.g. an explicitly case-sensitive APFS
+/// volume) and by `case_sensitive_by_name` everywhere else.
 fn classify_by_name(name: &str, host_is_macos: bool) -> (Option<u64>, bool, Duration, bool) {
     match name {
         "exfat" => {
@@ -154,6 +182,39 @@ fn classify_by_name(name: &str, host_is_macos: bool) -> (Option<u64>, bool, Dura
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The regression this guards: the Windows probe used to read
+    /// `FILE_CASE_SENSITIVE_SEARCH`, which NTFS sets, so every NTFS
+    /// destination came back case-sensitive and the case-collision
+    /// check never ran on Windows at all.
+    #[test]
+    fn the_windows_family_of_filesystems_is_case_insensitive() {
+        for name in ["ntfs", "exfat", "fat32", "fat16", "fat", "msdos", "vfat"] {
+            assert!(
+                !case_sensitive_by_name(name),
+                "{name} should be case-insensitive"
+            );
+        }
+    }
+
+    #[test]
+    fn native_unix_filesystems_are_case_sensitive() {
+        for name in ["apfs", "ext4", "btrfs", "xfs", "hfs"] {
+            assert!(
+                case_sensitive_by_name(name),
+                "{name} should be case-sensitive"
+            );
+        }
+    }
+
+    /// Conservative direction: an unknown filesystem reports
+    /// case-sensitive, so `validate()` reports no collision rather than
+    /// a spurious one against something this crate has no evidence
+    /// about.
+    #[test]
+    fn an_unrecognized_filesystem_is_assumed_case_sensitive() {
+        assert!(case_sensitive_by_name("some-network-fs"));
+    }
 
     #[test]
     fn exfat_on_macos_is_flagged_as_integrity_risk() {

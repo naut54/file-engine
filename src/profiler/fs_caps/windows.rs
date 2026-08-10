@@ -3,15 +3,15 @@ use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
 use windows_sys::Win32::Storage::FileSystem::{GetVolumeInformationW, GetVolumePathNameW};
-use windows_sys::Win32::System::SystemServices::FILE_CASE_SENSITIVE_SEARCH;
 
 use crate::error::Result;
 
-use super::{classify_by_name, classify_io_error, FilesystemCapabilities};
+use super::{case_sensitive_by_name, classify_by_name, classify_io_error, FilesystemCapabilities};
 
-/// Not empirically verified — no Windows machine available in the
-/// environment this was built in. Implemented from documented Win32
-/// behavior (`GetVolumePathNameW` + `GetVolumeInformationW`).
+/// Implemented from documented Win32 behavior (`GetVolumePathNameW` +
+/// `GetVolumeInformationW`). The name lookup and the capabilities
+/// derived from it are exercised on Windows by CI; the error paths
+/// (both `last_os_error()` branches) are not.
 pub(super) fn probe(path: &Path) -> Result<FilesystemCapabilities> {
     let wide_path = to_wide(path);
 
@@ -56,13 +56,12 @@ pub(super) fn probe(path: &Path) -> Result<FilesystemCapabilities> {
     }
 
     let name = from_wide(&fs_name_buf).to_lowercase();
-    // `FILE_CASE_SENSITIVE_SEARCH` reflects modern per-directory
-    // case-sensitivity opt-in (Windows 10+ WSL support), not a
-    // reliable "is this whole volume case-sensitive" signal for
-    // classic NTFS/exFAT/FAT32 — those default to unset (case
-    // -insensitive), which is what this crate's case-collision check
-    // needs to see to actually run. Best available single-call signal.
-    let case_sensitive = flags & FILE_CASE_SENSITIVE_SEARCH != 0;
+    // Derived from the filesystem name, *not* from this call's
+    // `FILE_CASE_SENSITIVE_SEARCH` flag — see `case_sensitive_by_name`
+    // for why that flag reports the opposite of what it appears to.
+    // `flags` is still requested because `GetVolumeInformationW` wants
+    // somewhere to put it, and a future capability may want to read it.
+    let case_sensitive = case_sensitive_by_name(&name);
 
     // Host OS is Windows itself here, so the exFAT-write-integrity
     // risk (specific to macOS's `F_FULLFSYNC` implementation) never

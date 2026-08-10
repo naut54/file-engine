@@ -112,16 +112,15 @@ fn case_sensitive(c_path: &std::ffi::CString) -> bool {
 
 /// Linux has no per-volume case-sensitivity query analogous to macOS's
 /// `pathconf` (ext4's optional per-directory casefold feature is out
-/// of scope) — derived from the filesystem type instead: the FAT/exFAT/
-/// NTFS family is case-insensitive, everything else in the match
-/// table is case-sensitive. Not empirically verified on Linux.
+/// of scope) — derived from the filesystem type instead, via the same
+/// `case_sensitive_by_name` table the Windows probe uses.
 #[cfg(target_os = "linux")]
 fn case_sensitive(c_path: &std::ffi::CString) -> bool {
     let mut buf: libc::statfs = unsafe { std::mem::zeroed() };
     if unsafe { libc::statfs(c_path.as_ptr(), &mut buf) } != 0 {
         return true;
     }
-    !matches!(magic_to_name(buf.f_type as i64), "msdos" | "exfat" | "ntfs")
+    super::case_sensitive_by_name(magic_to_name(buf.f_type as i64))
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "linux")))]
