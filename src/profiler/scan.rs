@@ -23,9 +23,8 @@ pub const DEFAULT_SMALL_FILE_THRESHOLD: u64 = 256 * 1024;
 
 /// Walks `root` and classifies every entry as small/large relative to
 /// `threshold`. If `root` is a file rather than a directory, `walkdir` is
-/// skipped and a one-entry `Workload` is returned directly — see
-/// dev-docs/design/batching-engine.md, "scan.rs" — so single-file and
-/// directory sources share the exact same downstream path.
+/// skipped and a one-entry `Workload` is returned directly, so
+/// single-file and directory sources share the exact same downstream path.
 pub(crate) async fn scan(root: &Path, threshold: u64) -> Result<Workload> {
     let root = root.to_path_buf();
     tokio::task::spawn_blocking(move || scan_blocking(&root, threshold))

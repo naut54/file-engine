@@ -12,7 +12,7 @@ mod windows;
 /// What a specific mounted filesystem can and can't represent, probed
 /// once per operation against the destination's containing volume —
 /// not per-entry, since these are properties of the mount, not of any
-/// individual file. See dev-docs/design/filesystem-detection.md.
+/// individual file. See `docs/guide/filesystem-safety.md`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct FilesystemCapabilities {
     /// Raw OS-reported name (e.g. "apfs", "exfat", "NTFS"), kept only
@@ -28,18 +28,15 @@ pub(crate) struct FilesystemCapabilities {
     /// rules apply, regardless of which OS is doing the writing —
     /// empirically confirmed those rules are enforced by Windows's own
     /// API layer, not the on-disk format, so a non-Windows writer can
-    /// silently create names that only break later, on Windows. See
-    /// "Windows as a first-class destination target" in
-    /// dev-docs/design/filesystem-detection.md.
+    /// silently create names that only break later, on Windows.
     pub windows_naming_rules: bool,
     /// Smallest reliably-representable gap between two distinct
     /// mtimes. `Duration::ZERO` for filesystems with sub-second
     /// resolution.
     pub timestamp_granularity: Duration,
     /// True only for the specific combination this crate has a
-    /// precedented integrity concern about: exFAT, host OS macOS.
-    /// See the Bitcoin Core `F_FULLFSYNC` finding in
-    /// dev-docs/research/filesystem-limitations.md, section 9.
+    /// precedented integrity concern about: exFAT, host OS macOS. Based
+    /// on the Bitcoin Core `F_FULLFSYNC` finding.
     pub write_integrity_risk: bool,
 }
 
@@ -149,8 +146,7 @@ fn classify_by_name(name: &str, host_is_macos: bool) -> (Option<u64>, bool, Dura
         // conservative in the direction of "assume no extra
         // protection is needed" rather than guessing — false
         // positives here would block operations against filesystems
-        // this crate has no actual evidence about. See "Open items"
-        // in dev-docs/design/filesystem-detection.md.
+        // this crate has no actual evidence about.
         _ => (None, false, Duration::ZERO, false),
     }
 }

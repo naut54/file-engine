@@ -7,8 +7,7 @@ use crate::error::{Error, Result};
 use crate::profiler::Entry;
 
 /// Lets the dispatcher stay generic over what happens to an entry (copy,
-/// move-via-copy, ...) instead of hardcoding filesystem operations. See
-/// dev-docs/design/batching-engine.md, "action.rs".
+/// move-via-copy, ...) instead of hardcoding filesystem operations.
 ///
 /// Dispatch is generic over `A: EntryAction` (static dispatch) rather than
 /// `dyn EntryAction`, since a single plan execution only ever uses one
@@ -70,9 +69,8 @@ impl EntryAction for CopyAction {
             // `std::fs::copy` (which this wraps) already copies the
             // source's permission bits to the destination unconditionally
             // — verified empirically, not assumed. No separate
-            // preserve-permissions step needed for files; see
-            // dev-docs/design/permissions.md for why that feature's only
-            // real effect ended up being on directories, not files.
+            // preserve-permissions step needed for files: that feature's
+            // only real effect is on directories, not files.
             tokio::fs::copy(&entry.path, &dest_path)
                 .await
                 .map(|_| ())

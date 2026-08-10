@@ -15,8 +15,7 @@ use super::pipeline::run_workload_pipeline;
 /// `to_copy`'s outcome and `to_delete`'s outcome, reported separately
 /// rather than merged: sync's delete phase acts on dest-only orphans, a
 /// genuinely different entry set from what the copy phase touched
-/// (unlike move's sweep, which deletes the entries it just copied). See
-/// dev-docs/design/batching-engine.md, "Sync's outcome shape".
+/// (unlike move's sweep, which deletes the entries it just copied).
 #[derive(Debug, Default)]
 pub struct SyncOutcome {
     pub copy: OperationOutcome,
@@ -55,21 +54,19 @@ impl SyncBuilder {
         self
     }
 
-    /// Only affects `sync`'s copy phase — see dev-docs/design/permissions.md
-    /// for why `diff.rs` doesn't (yet) diff directory permissions at all.
+    /// Only affects `sync`'s copy phase: `diff.rs` doesn't (yet) diff
+    /// directory permissions at all.
     #[cfg(all(unix, feature = "permissions"))]
     pub fn preserve_permissions(mut self, preserve: bool) -> Self {
         self.preserve_permissions = preserve;
         self
     }
 
-    /// See `CopyBuilder::allow_filesystem_integrity_risk` and
-    /// dev-docs/design/filesystem-detection.md. Without this, `sync` fails
-    /// before any write happens: `diff()` still runs first (it's
-    /// read-only), but `run_workload_pipeline`'s `validate()` call
-    /// rejects the copy phase outright — same single destination probe
-    /// that feeds `diff.rs`'s mtime tolerance also carries this flag's
-    /// answer.
+    /// See `CopyBuilder::allow_filesystem_integrity_risk`. Without this,
+    /// `sync` fails before any write happens: `diff()` still runs first
+    /// (it's read-only), but `run_workload_pipeline`'s `validate()` call
+    /// rejects the copy phase outright — same single destination probe that
+    /// feeds `diff.rs`'s mtime tolerance also carries this flag's answer.
     pub fn allow_filesystem_integrity_risk(mut self, allow: bool) -> Self {
         self.allow_filesystem_integrity_risk = allow;
         self
@@ -133,17 +130,14 @@ impl SyncBuilder {
 /// 3. If the copy phase completed without stopping early, delete every
 ///    `to_delete` entry (dest-only orphans).
 ///
-/// See dev-docs/design/batching-engine.md, "sync.rs and diff.rs".
-///
-/// The copy-phase gate is a judgment call the design doc didn't spell
-/// out: if the copy phase was aborted, cancelled, or hit a fatal error
-/// partway (`stopped_early.is_some()`), the delete phase is skipped
-/// entirely rather than removing dest-only orphans while the copy side
-/// is in a known-incomplete state — deleting real (if stale) data when
-/// the sync itself didn't finish is a worse failure mode than leaving an
-/// orphan in place for the next run to catch. Per-entry failures under
-/// `ContinueAndCollect` don't set `stopped_early`, so a normal partial
-/// failure still lets the delete phase run.
+/// The copy-phase gate is a judgment call: if the copy phase was aborted,
+/// cancelled, or hit a fatal error partway (`stopped_early.is_some()`), the
+/// delete phase is skipped entirely rather than removing dest-only orphans
+/// while the copy side is in a known-incomplete state — deleting real (if
+/// stale) data when the sync itself didn't finish is a worse failure mode
+/// than leaving an orphan in place for the next run to catch. Per-entry
+/// failures under `ContinueAndCollect` don't set `stopped_early`, so a
+/// normal partial failure still lets the delete phase run.
 #[allow(clippy::too_many_arguments)]
 async fn sync(
     source: &Path,
@@ -161,8 +155,7 @@ async fn sync(
     // Probed once and shared: `diff.rs` needs `timestamp_granularity` for
     // its mtime tolerance, `run_workload_pipeline` needs the full
     // capabilities for `validate()` — both describe the same destination
-    // volume, which hasn't changed between the two uses. See
-    // dev-docs/design/filesystem-detection.md, item 4.
+    // volume, which hasn't changed between the two uses.
     let dest_caps = probe_fs_caps(dest).await?;
 
     let sync_plan = diff(source, dest, diff_strategy, dest_caps.timestamp_granularity).await?;

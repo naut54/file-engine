@@ -9,8 +9,7 @@ mod handle;
 #[cfg(any(feature = "operations", feature = "watch"))]
 mod operations;
 // Also intended for `sync`'s `diff.rs` once that's wired up to use it
-// too (dev-docs/design/filesystem-detection.md, item 6) — currently only
-// called from `profiler::validate`.
+// too — currently only called from `profiler::validate`.
 #[cfg(feature = "operations")]
 mod paths;
 #[cfg(feature = "operations")]
@@ -123,10 +122,9 @@ mod tests {
 
     use super::*;
 
-    /// Confirms the event sequence contract from
-    /// dev-docs/design/handle-progress.md's `.start()` test list: a `Started`
-    /// before any `EntryStarted`, its `entries_total` matching what
-    /// actually ran, and one terminal event (`EntryCompleted` or
+    /// Confirms the event sequence contract `.start()` promises: a
+    /// `Started` before any `EntryStarted`, its `entries_total` matching
+    /// what actually ran, and one terminal event (`EntryCompleted` or
     /// `EntryFailed`) per entry.
     fn assert_well_formed(events: &[Progress], expected_entries: usize) {
         let started_at = events

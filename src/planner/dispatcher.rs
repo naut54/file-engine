@@ -23,8 +23,7 @@ enum Unit {
 /// applying `error_strategy` to per-entry failures and `Error::is_fatal()`
 /// to decide when to stop regardless of strategy. Cancellation is checked
 /// between batches/streams only, not inside an in-progress batch's entry
-/// loop. See dev-docs/design/batching-engine.md, "dispatcher.rs" and
-/// "Cooperative cancellation contract".
+/// loop.
 ///
 /// Rollback for `ErrorStrategy::Undo` calls `action.undo()` directly on
 /// every entry in `succeeded`, in reverse order, rather than going

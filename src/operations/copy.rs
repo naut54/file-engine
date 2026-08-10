@@ -16,7 +16,7 @@ pub struct CopyBuilder {
     dest: PathBuf,
     overwrite: bool,
     /// Unconditional field even though only `.preserve_permissions()`
-    /// (Unix-only) can ever set it — see dev-docs/design/permissions.md.
+    /// (Unix-only) can ever set it.
     preserve_permissions: bool,
     allow_filesystem_integrity_risk: bool,
     small_file_threshold: Option<u64>,
@@ -51,10 +51,9 @@ impl CopyBuilder {
 
     /// Proceed even when the destination filesystem has a known
     /// write-integrity risk on this platform (currently: exFAT on
-    /// macOS, see dev-docs/research/filesystem-limitations.md, section 9) —
-    /// without this, `.start()`'s `Handle` resolves to
+    /// macOS) — without this, `.start()`'s `Handle` resolves to
     /// `Err(Error::FilesystemIntegrityRisk)` before any data is written.
-    /// See dev-docs/design/filesystem-detection.md.
+    /// See `docs/guide/filesystem-safety.md`.
     pub fn allow_filesystem_integrity_risk(mut self, allow: bool) -> Self {
         self.allow_filesystem_integrity_risk = allow;
         self

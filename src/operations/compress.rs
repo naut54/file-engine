@@ -101,17 +101,16 @@ fn infer_format(dest: &Path) -> Result<CompressFormat> {
     }
 }
 
-/// See dev-docs/design/batching-engine.md, "compress.rs". Reuses the Profiler
-/// and `planner::plan`'s batching, but not `planner::dispatcher` —
-/// archive writers need a single sequential writer. One deviation from
-/// the original design worth flagging: workers here do the *read* in
-/// parallel and hand raw bytes to the writer, rather than compressing in
-/// the worker and handing over already-compressed bytes. `zip`'s writer
-/// API compresses as you write to it; there's no straightforward way to
-/// hand it pre-compressed bytes for a fresh entry without fighting its
-/// API (that's meant for copying between archives, not injecting
-/// arbitrary compressed streams). Compression is CPU-bound and cheap
-/// relative to the disk I/O this design already parallelizes, so the
+/// Reuses the Profiler and `planner::plan`'s batching, but not
+/// `planner::dispatcher` — archive writers need a single sequential writer.
+/// One deviation from the original design worth flagging: workers here do
+/// the *read* in parallel and hand raw bytes to the writer, rather than
+/// compressing in the worker and handing over already-compressed bytes.
+/// `zip`'s writer API compresses as you write to it; there's no
+/// straightforward way to hand it pre-compressed bytes for a fresh entry
+/// without fighting its API (that's meant for copying between archives, not
+/// injecting arbitrary compressed streams). Compression is CPU-bound and
+/// cheap relative to the disk I/O this design already parallelizes, so the
 /// practical benefit lost is small; what's preserved is the actual
 /// motivating concern — parallel reads instead of one file at a time.
 // Matches `run_copy_pipeline`/`move_path`/`sync`: these pipeline entry
@@ -329,8 +328,7 @@ async fn compress_zip(
                     Ok(bytes) => WriterMsg::Data { entry, bytes },
                     Err(e) => {
                         // Reported directly here, not by the writer —
-                        // this entry never reaches it (see
-                        // dev-docs/design/handle-progress.md, "compress_zip").
+                        // this entry never reaches it.
                         reporter.send(Progress::EntryFailed {
                             entry: entry.clone(),
                         });

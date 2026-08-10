@@ -34,8 +34,8 @@ file-engine = { version = "0.1", features = ["sync", "watch", "compress"] }
 | `checksum` | `DiffStrategy::Checksum` for `sync` | Content-hash comparison instead of size+mtime. |
 | `watch` | `FileEngine::watch()` | Does **not** require `operations` — watching doesn't go through the batching pipeline. |
 | `compress` | `FileEngine::compress()` | Zip or gzip, inferred from the destination extension unless set explicitly. |
-| `analyze` *(default)* | — | Currently unused by any public API; see `dev-docs/design/future-work.md` if you're building from source. |
-| `diagnostics` | — | Not yet integrated; see `dev-docs/design/future-work.md`. |
+| `analyze` *(default)* | — | Currently unused by any public API. |
+| `diagnostics` | — | Not yet integrated. |
 
 `sync` implies `operations`; `watch` does not.
 

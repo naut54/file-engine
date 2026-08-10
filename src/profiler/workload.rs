@@ -26,7 +26,7 @@ pub struct Entry {
 /// that's actually less current than what `copy()` reads live. Directory
 /// creation (`create_dir_all`) has no equivalent built-in behavior, which
 /// is what makes preserving *directory* permissions the one part of this
-/// feature that does something. See dev-docs/design/permissions.md.
+/// feature that does something.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DirEntry {
     pub path: PathBuf,

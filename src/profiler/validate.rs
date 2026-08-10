@@ -11,8 +11,7 @@ use super::workload::{DirEntry, Entry, Workload};
 /// reaches the Planner, paired with why. Unlike a typical pre-flight
 /// check, these aren't necessarily whole-operation failures — the
 /// pipeline layer applies `ErrorStrategy` to decide what happens next,
-/// same as any other per-entry failure. See
-/// dev-docs/design/filesystem-detection.md, "Decisions".
+/// same as any other per-entry failure.
 #[derive(Debug, Default)]
 pub(crate) struct ValidationOutcome {
     pub rejected_entries: Vec<(Entry, Error)>,
@@ -27,12 +26,11 @@ pub(crate) struct ValidationOutcome {
 /// Checks `workload` against what `dest_caps` can actually represent,
 /// removing anything that can't be copied as-is. Only the exFAT-on-macOS
 /// write-integrity risk is a true whole-operation failure (it isn't a
-/// property of any specific entry — every write to that destination
-/// carries it) — everything else is per-entry, reflected in the
-/// returned `ValidationOutcome` rather than an `Err`. `allow_filesystem_integrity_risk`
-/// is the one override this feature has (see
-/// dev-docs/design/filesystem-detection.md, "Decisions") — every other
-/// rejection is per-entry and already governed by the caller's
+/// property of any specific entry — every write to that destination carries
+/// it) — everything else is per-entry, reflected in the returned
+/// `ValidationOutcome` rather than an `Err`.
+/// `allow_filesystem_integrity_risk` is the one override this feature has —
+/// every other rejection is per-entry and already governed by the caller's
 /// `ErrorStrategy`, which needs no override here.
 pub(crate) fn validate(
     workload: &mut Workload,
@@ -238,9 +236,7 @@ fn retain_directories(
 /// (every one of them was silently accepted when written directly to a
 /// mounted exFAT drive from macOS), so this check applies based on
 /// `dest_caps.windows_naming_rules` (destination filesystem type)
-/// regardless of which OS is doing the writing. See "Windows as a
-/// first-class destination target" in
-/// dev-docs/design/filesystem-detection.md.
+/// regardless of which OS is doing the writing.
 const RESERVED_CHARS: &[char] = &['<', '>', ':', '"', '/', '\\', '|', '?', '*'];
 const RESERVED_BASE_NAMES: &[&str] = &[
     "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",

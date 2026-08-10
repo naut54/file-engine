@@ -10,9 +10,9 @@ use tokio_util::sync::CancellationToken;
 use crate::error::Result;
 use crate::progress::Progress;
 
-/// See dev-docs/design/handle-progress.md. One generic type reused across
-/// every operation (`T` = `OperationOutcome` for copy/move/compress,
-/// `SyncOutcome` for sync) rather than a handle type per operation.
+/// One generic type reused across every operation (`T` =
+/// `OperationOutcome` for copy/move/compress, `SyncOutcome` for sync)
+/// rather than a handle type per operation.
 pub struct Handle<T> {
     join_handle: JoinHandle<Result<T>>,
     progress: UnboundedReceiverStream<Progress>,
@@ -36,10 +36,9 @@ impl<T> Handle<T> {
         &mut self.progress
     }
 
-    /// Cooperative — see dev-docs/design/batching-engine.md's cancellation
-    /// contract. Detached-on-drop: dropping the `Handle` without calling
-    /// this keeps the operation running to completion; see
-    /// dev-docs/design/handle-progress.md, "Drop behavior".
+    /// Cooperative. Detached-on-drop: dropping the `Handle` without
+    /// calling this keeps the operation running to completion. See
+    /// `docs/guide/progress-and-cancellation.md`.
     pub fn cancel(&self) {
         self.cancel.cancel();
     }

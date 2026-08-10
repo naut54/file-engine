@@ -56,8 +56,7 @@ impl MoveBuilder {
     /// Only meaningful for the cross-device fallback, for the same
     /// reason `.preserve_permissions()` is — the atomic-rename fast path
     /// never touches `dest`'s filesystem capabilities at all. See
-    /// `CopyBuilder::allow_filesystem_integrity_risk` and
-    /// dev-docs/design/filesystem-detection.md.
+    /// `CopyBuilder::allow_filesystem_integrity_risk`.
     pub fn allow_filesystem_integrity_risk(mut self, allow: bool) -> Self {
         self.allow_filesystem_integrity_risk = allow;
         self
@@ -111,8 +110,7 @@ impl MoveBuilder {
 }
 
 /// Pure classification, unit-testable with synthetic `io::Error` values —
-/// no real cross-device filesystem needed. See
-/// dev-docs/design/batching-engine.md, "Move" / "EXDEV test seam".
+/// no real cross-device filesystem needed.
 pub(crate) fn is_cross_device(err: &io::Error) -> bool {
     err.kind() == io::ErrorKind::CrossesDevices
 }
@@ -147,8 +145,6 @@ impl Renamer for TokioRenamer {
 /// 3. Any other rename error surfaces directly.
 /// 4. Once the copy phase resolves, run the deferred deletion sweep over
 ///    `succeeded`, governed by the same `ErrorStrategy`.
-///
-/// See dev-docs/design/batching-engine.md, "Move".
 #[allow(clippy::too_many_arguments)]
 async fn move_path<R: Renamer>(
     source: &Path,
@@ -165,8 +161,7 @@ async fn move_path<R: Renamer>(
 ) -> Result<OperationOutcome> {
     match renamer.rename(source, dest).await {
         // Trivially "everything succeeded" without ever enumerating
-        // individual entries, so no progress events are emitted either
-        // — see dev-docs/design/batching-engine.md, "Move".
+        // individual entries, so no progress events are emitted either.
         Ok(()) => return Ok(OperationOutcome::default()),
         Err(err) if is_cross_device(&err) => {}
         Err(err) => return Err(classify_error(err, source)),

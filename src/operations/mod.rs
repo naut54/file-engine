@@ -13,9 +13,8 @@ mod sync;
 #[cfg(feature = "watch")]
 mod watch;
 
-/// Default worker pool size: `available_parallelism()`, per
-/// dev-docs/design/batching-engine.md's "Worker pool size" decision — falls
-/// back to 1 if the platform can't report it.
+/// Default worker pool size: `available_parallelism()` — falls back to 1
+/// if the platform can't report it.
 #[cfg(feature = "operations")]
 pub(crate) fn default_concurrency() -> usize {
     std::thread::available_parallelism()

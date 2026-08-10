@@ -31,9 +31,8 @@ pub enum Error {
     #[error("gzip compression requires a single file, got a directory: {path}")]
     GzipRequiresFile { path: PathBuf },
 
-    // The four variants below back
-    // dev-docs/design/filesystem-detection.md's pre-flight validation
-    // (`profiler::validate`) — gated on `operations` since that's the
+    // The four variants below back the pre-flight validation in
+    // `profiler::validate` — gated on `operations` since that's the
     // only feature that ever constructs them, matching the
     // `compress`-gated variants above.
     #[cfg(feature = "operations")]
@@ -49,8 +48,7 @@ pub enum Error {
     ReservedName { path: PathBuf },
 
     /// Unlike the three variants above (per-entry, governed by
-    /// `ErrorStrategy` — see dev-docs/design/filesystem-detection.md,
-    /// "Decisions"), this describes a whole-destination risk, not a
+    /// `ErrorStrategy`), this describes a whole-destination risk, not a
     /// property of any specific entry — `is_fatal` accordingly.
     #[cfg(feature = "operations")]
     #[error(
@@ -62,8 +60,7 @@ pub enum Error {
 impl Error {
     /// Fatal errors stop all remaining dispatch regardless of the
     /// configured `ErrorStrategy`; per-entry errors are handled per that
-    /// strategy. See dev-docs/design/batching-engine.md for the rationale,
-    /// including why `PermissionDenied`/`Io` default to per-entry despite
+    /// strategy. `PermissionDenied`/`Io` default to per-entry despite
     /// being genuinely ambiguous.
     ///
     /// Only consumed by `operations`-gated code (`dispatcher.rs`,

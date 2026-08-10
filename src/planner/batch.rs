@@ -10,9 +10,8 @@ pub struct Batch {
 
 /// Sorts `entries` by size (per `config.sort_order`) then greedily fills
 /// batches under two hard caps (`max_bytes_per_batch`, resolved
-/// `max_files_per_batch`) — see dev-docs/design/batching-engine.md, "batch.rs",
-/// for why sorting first removes the reliance on statistical luck that a
-/// pure average-based approach would have.
+/// `max_files_per_batch`). Sorting first removes the reliance on
+/// statistical luck that a pure average-based approach would have.
 pub(crate) fn pack(mut entries: Vec<Entry>, config: &BatchConfig) -> Vec<Batch> {
     let max_files = config.resolved_max_files_per_batch(&entries);
     let max_bytes = config.max_bytes_per_batch;

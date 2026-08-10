@@ -11,8 +11,7 @@ use super::{classify_by_name, classify_io_error, FilesystemCapabilities};
 
 /// Not empirically verified — no Windows machine available in the
 /// environment this was built in. Implemented from documented Win32
-/// behavior (`GetVolumePathNameW` + `GetVolumeInformationW`); see
-/// "Open items" in dev-docs/design/filesystem-detection.md.
+/// behavior (`GetVolumePathNameW` + `GetVolumeInformationW`).
 pub(super) fn probe(path: &Path) -> Result<FilesystemCapabilities> {
     let wide_path = to_wide(path);
 
@@ -62,8 +61,7 @@ pub(super) fn probe(path: &Path) -> Result<FilesystemCapabilities> {
     // reliable "is this whole volume case-sensitive" signal for
     // classic NTFS/exFAT/FAT32 — those default to unset (case
     // -insensitive), which is what this crate's case-collision check
-    // needs to see to actually run. Best available single-call signal;
-    // see "Open items" in dev-docs/design/filesystem-detection.md.
+    // needs to see to actually run. Best available single-call signal.
     let case_sensitive = flags & FILE_CASE_SENSITIVE_SEARCH != 0;
 
     // Host OS is Windows itself here, so the exFAT-write-integrity

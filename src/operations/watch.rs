@@ -11,9 +11,7 @@ use crate::watch_handle::WatchHandle;
 
 // `watch` deliberately does not use the Profiler/Planner/Dispatcher
 // pipeline — it's an indefinite event stream (`notify`), not a
-// bulk-transfer workload with anything to profile or batch. See
-// dev-docs/design/batching-engine.md, "Integration: operations", and
-// dev-docs/design/watch.md for the full design.
+// bulk-transfer workload with anything to profile or batch.
 pub struct WatchBuilder {
     path: PathBuf,
     recursive: bool,

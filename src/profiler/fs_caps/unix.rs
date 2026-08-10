@@ -51,15 +51,13 @@ fn fstype_name(c_path: &std::ffi::CStr, path: &Path) -> Result<String> {
     }
 }
 
-/// Linux's `statfs` only reports a numeric magic number (`f_type`),
-/// not a name — mapped against the handful of filesystems this crate
-/// actually has research on (`dev-docs/research/filesystem-limitations.md`).
-/// FUSE-mounted filesystems (`ntfs-3g`, `exfat-fuse`) all report the
-/// same generic FUSE magic and can't be told apart this way; they fall
-/// through to "unrecognized" (conservative defaults) rather than a
-/// guess. Not empirically verified on Linux — no Linux machine
-/// available in the environment this was built in; see "Open items"
-/// in dev-docs/design/filesystem-detection.md.
+/// Linux's `statfs` only reports a numeric magic number (`f_type`), not a
+/// name — mapped against the handful of filesystems this crate actually has
+/// research on. FUSE-mounted filesystems (`ntfs-3g`, `exfat-fuse`) all
+/// report the same generic FUSE magic and can't be told apart this way;
+/// they fall through to "unrecognized" (conservative defaults) rather than
+/// a guess. Not empirically verified on Linux — no Linux machine available
+/// in the environment this was built in.
 #[cfg(target_os = "linux")]
 fn fstype_name(c_path: &std::ffi::CStr, path: &Path) -> Result<String> {
     unsafe {
@@ -114,8 +112,7 @@ fn case_sensitive(c_path: &std::ffi::CString) -> bool {
 
 /// Linux has no per-volume case-sensitivity query analogous to macOS's
 /// `pathconf` (ext4's optional per-directory casefold feature is out
-/// of scope — see dev-docs/design/filesystem-detection.md's future-work
-/// notes) — derived from the filesystem type instead: the FAT/exFAT/
+/// of scope) — derived from the filesystem type instead: the FAT/exFAT/
 /// NTFS family is case-insensitive, everything else in the match
 /// table is case-sensitive. Not empirically verified on Linux.
 #[cfg(target_os = "linux")]

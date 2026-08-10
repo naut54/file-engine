@@ -10,8 +10,8 @@ use tokio_util::sync::CancellationToken;
 use crate::error::Result;
 use crate::watch_event::WatchEvent;
 
-/// See dev-docs/design/watch.md. Structurally similar to `Handle<T>` (event
-/// stream + `.cancel()` + awaitable) but a distinct type, not `Handle<()>`
+/// Structurally similar to `Handle<T>` (event stream + `.cancel()` +
+/// awaitable) but a distinct type, not `Handle<()>`
 /// — there's no bounded `T` to genericize over, and the event type
 /// (`WatchEvent`) isn't `Progress`.
 pub struct WatchHandle {
@@ -38,8 +38,7 @@ impl WatchHandle {
     }
 
     /// Cooperative. Resolves the `WatchHandle`'s `Future` output to
-    /// `Ok(())` once observed — see the "Stopping" section of
-    /// dev-docs/design/watch.md.
+    /// `Ok(())` once observed.
     pub fn cancel(&self) {
         self.cancel.cancel();
     }

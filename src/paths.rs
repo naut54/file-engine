@@ -15,8 +15,7 @@ use unicode_normalization::UnicodeNormalization;
 /// accented filenames from APFS to exFAT produces byte-different but
 /// visually identical names) — comparing raw path bytes across two
 /// filesystems with different normalization behavior produces false
-/// mismatches. See dev-docs/design/filesystem-detection.md, item 6, and
-/// dev-docs/research/filesystem-limitations.md, section 1.
+/// mismatches.
 pub(crate) fn normalize_for_comparison(path: &Path) -> PathBuf {
     path.components()
         .map(|component| {

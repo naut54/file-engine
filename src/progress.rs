@@ -4,11 +4,11 @@ use tokio::sync::mpsc;
 
 use crate::profiler::Entry;
 
-/// See dev-docs/design/handle-progress.md. Discrete per-entry events rather
-/// than a cumulative snapshot; `EntryFailed` carries only the `Entry`,
-/// not the `Error` — `Error` isn't `Clone` (it wraps `std::io::Error`),
-/// and the failure detail is already available from the operation's
-/// final `OperationOutcome.failed` once the handle resolves.
+/// Discrete per-entry events rather than a cumulative snapshot;
+/// `EntryFailed` carries only the `Entry`, not the `Error` — `Error` isn't
+/// `Clone` (it wraps `std::io::Error`), and the failure detail is already
+/// available from the operation's final `OperationOutcome.failed` once the
+/// handle resolves.
 #[derive(Debug, Clone)]
 pub enum Progress {
     /// Emitted once per phase, before any entries in that phase start.
@@ -36,8 +36,7 @@ pub enum Progress {
     /// every `Entry`-typed variant to also accept `DirEntry`. Added
     /// after a real run against a USB-connected exFAT drive spent about
     /// a minute silently creating ~7,700 directories one at a time
-    /// before `Started` (for the file-copy phase) was ever emitted —
-    /// see dev-docs/design/handle-progress.md.
+    /// before `Started` (for the file-copy phase) was ever emitted.
     DirectoriesStarted {
         total: usize,
     },

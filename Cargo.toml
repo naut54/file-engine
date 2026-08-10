@@ -19,8 +19,7 @@ default     = ["operations", "analyze"]
 # (src/paths.rs) — both needed unconditionally by copy/move/sync, not
 # gated behind their own feature the way `permissions` is, since
 # filesystem-capability detection isn't optional preservation behavior,
-# it's a correctness pre-flight check. See
-# dev-docs/design/filesystem-detection.md.
+# it's a correctness pre-flight check.
 operations  = ["dep:walkdir", "dep:libc", "dep:windows-sys", "dep:unicode-normalization"]
 analyze     = ["dep:walkdir", "dep:infer"]
 checksum    = ["analyze", "dep:blake3"]

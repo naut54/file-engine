@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-/// See dev-docs/design/watch.md. A thin wrapper rather than a re-export of
-/// `notify::Event` — insulates the public API from `notify`'s types and
+/// A thin wrapper rather than a re-export of `notify::Event` —
+/// insulates the public API from `notify`'s types and
 /// version, at the cost of collapsing its more granular sub-kinds
 /// (`Create(CreateKind::File/Folder/...)`, etc.) into what most consumers
 /// actually branch on.

@@ -18,8 +18,7 @@ use crate::progress::{Progress, ProgressReporter};
 /// Shared orchestration used by both `copy` and `move_path`'s
 /// cross-device fallback: Profiler -> Planner -> Dispatcher(CopyAction).
 /// Kept separate from `copy.rs` so neither operation file depends on the
-/// other's internals. See dev-docs/design/batching-engine.md, "Module
-/// layout".
+/// other's internals.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_copy_pipeline(
     source: &Path,
@@ -58,16 +57,15 @@ pub(crate) async fn run_copy_pipeline(
 ///
 /// Takes `dest_caps` as a parameter rather than probing internally:
 /// `sync`'s pipeline needs the same probe result for `diff.rs`'s mtime
-/// tolerance (dev-docs/design/filesystem-detection.md, item 4) — probing
-/// twice per `sync` call would just be redundant syscalls against a
-/// destination that hasn't changed between the two calls, so the one
-/// caller that already has a probe (`sync.rs`) passes it straight
-/// through, and `run_copy_pipeline` (which has no other reason to probe)
-/// does the single probe itself.
+/// tolerance — probing twice per `sync` call would just be redundant
+/// syscalls against a destination that hasn't changed between the two
+/// calls, so the one caller that already has a probe (`sync.rs`) passes it
+/// straight through, and `run_copy_pipeline` (which has no other reason to
+/// probe) does the single probe itself.
 ///
 /// Fallible (unlike before filesystem-capability detection was wired in):
 /// the write-integrity risk `validate()` can surface now propagates as a
-/// genuine `Err`. See dev-docs/design/filesystem-detection.md.
+/// genuine `Err`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn run_workload_pipeline(
     mut workload: Workload,
@@ -105,7 +103,7 @@ pub(crate) async fn run_workload_pipeline(
     // whatever `validate()` left in the (now-smaller) workload;
     // `AbortOnError`/`Undo` stop before any work starts at all, the same
     // as if the first entry `dispatch()` touched had failed under that
-    // strategy. See dev-docs/design/filesystem-detection.md, "Decisions".
+    // strategy.
     let had_rejections = !outcome.failed.is_empty() || !directories_failed.is_empty();
     if had_rejections {
         let stop_reason = match config.error_strategy {
@@ -298,10 +296,9 @@ async fn ensure_directories_exist(
 }
 
 /// Best-effort: always runs through every directory regardless of
-/// individual failures, never sets `stopped_early` — see
-/// dev-docs/design/permissions.md for why. Applied after every file entry
-/// has already been dispatched, never before: a source directory whose
-/// mode doesn't permit writes (e.g. `0o500`) would otherwise lock the
+/// individual failures, never sets `stopped_early`. Applied after every
+/// file entry has already been dispatched, never before: a source directory
+/// whose mode doesn't permit writes (e.g. `0o500`) would otherwise lock the
 /// copy out of its own destination if applied first.
 #[cfg(all(unix, feature = "permissions"))]
 async fn apply_directory_permissions(
@@ -653,9 +650,9 @@ mod tests {
     // The two tests below rely on this dev/CI machine's default temp
     // volume being case-insensitive (true for the default macOS boot
     // volume — empirically confirmed via `pathconf(_PC_CASE_SENSITIVE)`
-    // while building `fs_caps`, see dev-docs/design/filesystem-detection.md)
-    // to exercise the real `probe()` -> `validate()` -> `ErrorStrategy`
-    // wiring end-to-end, not a mocked capability.
+    // while building `fs_caps`) to exercise the real `probe()` ->
+    // `validate()` -> `ErrorStrategy` wiring end-to-end, not a mocked
+    // capability.
     //
     // Built as a hand-constructed `Workload` fed straight to
     // `run_workload_pipeline`, bypassing `scan()`, rather than two real

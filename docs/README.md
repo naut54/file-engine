@@ -10,6 +10,6 @@
   fits together today, and the conventions to follow when adding to it.
 
 These describe *current* behavior. They don't carry design rationale,
-alternatives considered, or implementation history — that lives in this
-repo's local, git-ignored `dev-docs/` (not published, not available if
-you're reading this from a clone or from crates.io).
+alternatives considered, or implementation history — where a decision
+isn't self-evident from the code, the reasoning is recorded in a comment
+at the point it applies.

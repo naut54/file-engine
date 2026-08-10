@@ -21,18 +21,16 @@ pub(crate) struct SyncPlan {
 }
 
 /// Walks both `source` and `dest` via the Profiler and matches entries by
-/// `relative_path` to produce a `SyncPlan`. See
-/// dev-docs/design/batching-engine.md, "sync.rs and diff.rs".
+/// `relative_path` to produce a `SyncPlan`.
 ///
-/// `tolerance` absorbs a destination filesystem's coarse mtime
-/// resolution (e.g. FAT/exFAT's 2-second granularity — see
-/// `FilesystemCapabilities::timestamp_granularity`,
-/// dev-docs/design/filesystem-detection.md item 4) so a source file that's
+/// `tolerance` absorbs a destination filesystem's coarse mtime resolution
+/// (e.g. FAT/exFAT's 2-second granularity — see
+/// `FilesystemCapabilities::timestamp_granularity`) so a source file that's
 /// only marginally newer than what's already at the destination, purely
-/// because the destination can't represent the sub-tolerance difference
-/// in the first place, isn't treated as "changed" on every single sync
-/// run. `Duration::ZERO` (native filesystems, sub-second resolution)
-/// preserves exact comparison.
+/// because the destination can't represent the sub-tolerance difference in
+/// the first place, isn't treated as "changed" on every single sync run.
+/// `Duration::ZERO` (native filesystems, sub-second resolution) preserves
+/// exact comparison.
 pub(crate) async fn diff(
     source: &Path,
     dest: &Path,
@@ -53,10 +51,9 @@ pub(crate) async fn diff(
     // written as NFD by one filesystem's writer (e.g. HFS+/APFS) and
     // read back as NFC-normalized bytes from another (e.g. exFAT) is
     // still the same file — comparing raw bytes would treat it as
-    // "only in source" and "only in dest" instead of matching it. See
-    // dev-docs/design/filesystem-detection.md, item 6. The *source* entry's
-    // own (unnormalized) `relative_path` is what actually gets used
-    // downstream for the real copy — normalization here is comparison
+    // "only in source" and "only in dest" instead of matching it. The
+    // *source* entry's own (unnormalized) `relative_path` is what gets
+    // used downstream for the real copy — normalization here is comparison
     // only, never used to construct a path passed to a filesystem call.
     let mut dest_by_relative_path: HashMap<PathBuf, Entry> = dest_entries
         .into_iter()
