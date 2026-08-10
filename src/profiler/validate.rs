@@ -523,10 +523,12 @@ mod tests {
         assert!(outcome.rejected_entries.is_empty());
     }
 
+    /// Uses `<` rather than `:` so the fixture parses identically on
+    /// every host — see `a_colon_in_a_unix_filename_is_rejected_for_a_windows_destination`.
     #[test]
     fn reserved_character_in_a_filename_is_rejected_when_windows_naming_rules_apply() {
         let mut workload = Workload {
-            small: vec![entry("a:b.txt", 1)],
+            small: vec![entry("a<b.txt", 1)],
             large: vec![],
             directories: vec![],
         };
@@ -544,7 +546,7 @@ mod tests {
     #[test]
     fn reserved_characters_are_allowed_when_windows_naming_rules_do_not_apply() {
         let mut workload = Workload {
-            small: vec![entry("a:b.txt", 1)],
+            small: vec![entry("a<b.txt", 1)],
             large: vec![],
             directories: vec![],
         };
@@ -554,6 +556,57 @@ mod tests {
 
         assert!(outcome.rejected_entries.is_empty());
         assert_eq!(workload.small.len(), 1);
+    }
+
+    /// Not run on Windows: `a:b.txt` is a filename on Unix, but the
+    /// same string parses as a drive-relative path there (prefix `a:`
+    /// plus `b.txt`), so the colon never reaches the component loop —
+    /// and no Windows filesystem could hand us such a name to scan
+    /// anyway. The case that matters is precisely this one, a Unix
+    /// source bound for a Windows-family destination, validated on the
+    /// Unix host doing the copy.
+    #[cfg(not(windows))]
+    #[test]
+    fn a_colon_in_a_unix_filename_is_rejected_for_a_windows_destination() {
+        let mut workload = Workload {
+            small: vec![entry("a:b.txt", 1)],
+            large: vec![],
+            directories: vec![],
+        };
+        let dest_caps = caps(|c| c.windows_naming_rules = true);
+
+        let outcome = validate(&mut workload, &dest_caps, false).unwrap();
+
+        assert!(workload.small.is_empty());
+        assert!(matches!(
+            outcome.rejected_entries[0].1,
+            Error::ReservedName { .. }
+        ));
+    }
+
+    /// Guards the reason `check_windows_naming` walks `Path::components()`
+    /// instead of splitting the path string on separators: `\` is an
+    /// ordinary character in a Unix filename, so `a\b.txt` is a single
+    /// component here whose backslash has to be rejected for a Windows
+    /// destination. Splitting on `\` would read it as two path segments
+    /// and let the violation through.
+    #[cfg(unix)]
+    #[test]
+    fn a_backslash_in_a_unix_filename_is_rejected_for_a_windows_destination() {
+        let mut workload = Workload {
+            small: vec![entry("a\\b.txt", 1)],
+            large: vec![],
+            directories: vec![],
+        };
+        let dest_caps = caps(|c| c.windows_naming_rules = true);
+
+        let outcome = validate(&mut workload, &dest_caps, false).unwrap();
+
+        assert!(workload.small.is_empty());
+        assert!(matches!(
+            outcome.rejected_entries[0].1,
+            Error::ReservedName { .. }
+        ));
     }
 
     #[test]
