@@ -1,11 +1,11 @@
 [package]
 name = "file-engine"
-version = "1.1.1"
+version = "2.0.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
 description = "Async, cross-platform file operations engine for desktop apps and developer tools: copy, move, sync, watch, and compress files with progress reporting and cancellation."
-repository = "https://github.com/<author>/file-engine"
+repository = "https://github.com/naut54/file-engine"
 readme = "README.md"
 keywords = ["filesystem", "io", "async", "tokio", "copy"]
 categories = ["filesystem", "asynchronous"]
@@ -30,7 +30,10 @@ sync        = ["operations", "analyze"]
 diagnostics = ["dep:error-engine"]
 
 [dependencies]
-tokio = { version = "1", features = ["fs", "rt", "rt-multi-thread", "macros", "sync", "io-util"] }
+# `time` backs the destination-size sampling in `planner/dispatcher.rs`
+# (`Progress::EntryProgress`). Declared explicitly rather than relied on
+# via feature unification from another dependency.
+tokio = { version = "1", features = ["fs", "rt", "rt-multi-thread", "macros", "sync", "io-util", "time"] }
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 thiserror = "1"

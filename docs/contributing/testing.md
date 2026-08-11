@@ -80,6 +80,43 @@ also `pub` (or re-exported).
 
 ## Real-world testing
 
+`scripts/make-fixtures.sh` builds the trees for this, so the runs are
+reproducible rather than improvised each time:
+
+```sh
+./scripts/make-fixtures.sh generate   # ./.fixtures (gitignored, ~5.4GB)
+./scripts/make-fixtures.sh volume     # macOS: mount /Volumes/fetest
+./scripts/make-fixtures.sh clean      # unmount and delete both
+```
+
+Sizes are overridable for a quick pass, as flags or the matching
+environment variables (the flag wins if both are set):
+
+```sh
+./scripts/make-fixtures.sh generate --small-files 500 --single-mb 64
+./scripts/make-fixtures.sh volume --volume-fs ExFAT --volume-gb 2
+```
+
+`--dir DIR` relocates the fixture directory (and the disk image inside
+it) for every command. `--help` lists every flag with its default.
+
+| Fixture | What it exercises |
+| --- | --- |
+| `many-small` | 15,000 × 30KB — batching, the per-file cost regime |
+| `single-large` | one 3GB file — in-flight `EntryProgress` sampling; the only signal a lone streamed entry produces |
+| `mixed` | both regimes at once — the dispatcher's calibration reordering, and `max(small, large)` |
+| `empty-dirs` | 411 directories with no files beneath them — the pre-pass that creates them, and the per-directory cost term |
+| `edge-cases` | zero-byte, the 256KB small/large boundary in both directions, Windows-reserved names, and (where the source volume can represent them) case-collision and NFC/NFD pairs |
+
+**Copy onto a different filesystem, not just a different directory.** A
+same-volume copy on APFS is a `clonefile`: 3GB completes in under a
+millisecond, moves no bytes, and emits no byte progress at all. It cannot
+exercise throughput, sampling, or estimation. The `volume` subcommand
+mounts a disk image for this; `VOLUME_FS=ExFAT` is the one to use for
+`edge-cases`, since exFAT is where Windows naming rules and the known
+write-integrity risk actually apply (that copy needs
+`--allow-integrity-risk` to get past the fatal pre-flight check).
+
 Unit and integration tests catch most things, but this crate's most
 consequential bugs so far (silently-missing empty directory subtrees,
 Unicode normalization mismatches, a directory-creation pass that was

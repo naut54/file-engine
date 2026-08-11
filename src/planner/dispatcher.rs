@@ -19,6 +19,59 @@ enum Unit {
     Stream(Entry),
 }
 
+/// How often a streamed entry's destination file is sampled for
+/// `Progress::EntryProgress`. Frequent enough that a slow transfer feels
+/// live, sparse enough that the cost (one `metadata` call per in-flight
+/// stream) stays irrelevant next to the copy itself.
+const PROGRESS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Reports how far a single in-flight streamed entry has got, by watching
+/// its destination file grow, until `cancel` fires.
+///
+/// This exists because `tokio::fs::copy` is opaque while it runs. Copying
+/// in chunks would give exact byte counts directly, but would forfeit the
+/// kernel's accelerated copy paths (`clonefile` on APFS, `copy_file_range`
+/// on Linux) that make same-volume copies effectively instant — measured
+/// here at 2GB in under a millisecond. Sampling the destination keeps
+/// those paths and costs one syscall per interval.
+///
+/// Silently reports nothing if it can't stat the destination (it may not
+/// exist yet) — progress reporting must never be able to fail an
+/// operation that is otherwise succeeding.
+async fn report_entry_progress(
+    path: std::path::PathBuf,
+    entry: Entry,
+    reporter: ProgressReporter,
+    cancel: CancellationToken,
+) {
+    let mut last_reported = 0;
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return,
+            _ = tokio::time::sleep(PROGRESS_POLL_INTERVAL) => {}
+        }
+
+        let Ok(metadata) = tokio::fs::metadata(&path).await else {
+            continue;
+        };
+
+        // Clamped to the size recorded at scan time: the estimator treats
+        // these as progress toward a known total, and a destination that
+        // momentarily measures larger (a pre-existing file mid-truncation)
+        // must not push reported progress past 100%.
+        let bytes_copied = metadata.len().min(entry.size);
+        if bytes_copied > last_reported {
+            last_reported = bytes_copied;
+            reporter.send(Progress::EntryProgress {
+                entry: entry.clone(),
+                bytes_copied,
+            });
+        }
+    }
+}
+
 /// Executes an `ExecutionPlan` against a concurrency-limited worker pool,
 /// applying `error_strategy` to per-entry failures and `Error::is_fatal()`
 /// to decide when to stop regardless of strategy. Cancellation is checked
@@ -47,9 +100,37 @@ pub(crate) async fn dispatch<A: EntryAction + 'static>(
     let entries_total: usize =
         plan.batches.iter().map(|b| b.entries.len()).sum::<usize>() + plan.streams.len();
 
-    let mut units: Vec<Unit> = Vec::with_capacity(plan.batches.len() + plan.streams.len());
+    let mut streams = plan.streams;
+
+    // One stream is pulled to the front of the queue as a calibration
+    // sample. Everything behind it is unchanged.
+    //
+    // Streams used to run strictly after every batch, which meant that on
+    // a workload with many small files and a few large ones, no large file
+    // finished until the operation was nearly over — a real 2.7GB run put
+    // ~56 batch units ahead of 6 streams and completed its first stream at
+    // 95% elapsed. Nothing consuming `Progress` can observe a per-byte
+    // transfer rate until a streamed entry completes (an in-flight one
+    // reports nothing between `EntryStarted` and `EntryCompleted`), so
+    // that ordering withheld the only true bandwidth measurement in the
+    // run until it was useless. `EtaEstimator` is the consumer that
+    // motivated this, but the measurement isn't specific to it.
+    //
+    // The *smallest* stream is chosen, not the largest: it still clears
+    // the small-file threshold, so it's bandwidth-dominated rather than
+    // per-file-overhead-dominated, but it completes soonest — and the
+    // point is to get a usable sample early, not a perfect one.
+    let calibration_stream = streams
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, stream)| stream.entry.size)
+        .map(|(index, _)| index)
+        .map(|index| streams.remove(index));
+
+    let mut units: Vec<Unit> = Vec::with_capacity(plan.batches.len() + streams.len() + 1);
+    units.extend(calibration_stream.map(|s| Unit::Stream(s.entry)));
     units.extend(plan.batches.into_iter().map(|b| Unit::Batch(b.entries)));
-    units.extend(plan.streams.into_iter().map(|s| Unit::Stream(s.entry)));
+    units.extend(streams.into_iter().map(|s| Unit::Stream(s.entry)));
 
     reporter.send(Progress::Started {
         bytes_total: Some(bytes_total),
@@ -96,9 +177,13 @@ pub(crate) async fn dispatch<A: EntryAction + 'static>(
 
         join_set.spawn(async move {
             let _permit = permit;
-            let entries = match unit {
-                Unit::Batch(entries) => entries,
-                Unit::Stream(entry) => vec![entry],
+            // Only streamed entries are sampled: a batch's entries are
+            // small by construction, so each finishes well inside one poll
+            // interval and would be sampled zero times anyway — the polling
+            // would be pure overhead.
+            let (entries, sample_bytes) = match unit {
+                Unit::Batch(entries) => (entries, false),
+                Unit::Stream(entry) => (vec![entry], true),
             };
 
             for entry in entries {
@@ -106,7 +191,32 @@ pub(crate) async fn dispatch<A: EntryAction + 'static>(
                     entry: entry.clone(),
                 });
 
-                match action.execute(&entry, &dest_root).await {
+                let sampler = sample_bytes
+                    .then(|| action.progress_target(&entry, &dest_root))
+                    .flatten()
+                    .map(|path| {
+                        let token = CancellationToken::new();
+                        let handle = tokio::spawn(report_entry_progress(
+                            path,
+                            entry.clone(),
+                            reporter.clone(),
+                            token.clone(),
+                        ));
+                        (token, handle)
+                    });
+
+                let result = action.execute(&entry, &dest_root).await;
+
+                if let Some((token, handle)) = sampler {
+                    token.cancel();
+                    // A sampler panic (a runtime built without the time
+                    // driver would produce one on its first sleep) is
+                    // swallowed deliberately: losing intermediate progress
+                    // must not fail a copy that succeeded.
+                    let _ = handle.await;
+                }
+
+                match result {
                     Ok(()) => {
                         reporter.send(Progress::EntryCompleted {
                             entry: entry.clone(),
@@ -189,6 +299,7 @@ mod tests {
     use crate::error::{Error, Result};
 
     use super::super::batch::Batch;
+    use super::super::plan::StreamJob;
     use super::*;
 
     fn entry(name: &str) -> Entry {
@@ -294,6 +405,174 @@ mod tests {
             fail: Arc::new(fail),
         };
         (action, log, max_active)
+    }
+
+    /// Writes its destination file in visible increments, so the sampler
+    /// has something to observe growing — standing in for a real
+    /// cross-device `fs::copy`, which is opaque while it runs.
+    struct GrowingAction;
+
+    impl EntryAction for GrowingAction {
+        fn execute<'a>(
+            &'a self,
+            entry: &'a Entry,
+            dest_root: &'a Path,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+            Box::pin(async move {
+                let dest = dest_root.join(&entry.relative_path);
+                for step in 1..=4u64 {
+                    tokio::fs::write(&dest, vec![0u8; (entry.size / 4 * step) as usize])
+                        .await
+                        .unwrap();
+                    tokio::time::sleep(Duration::from_millis(150)).await;
+                }
+                Ok(())
+            })
+        }
+
+        fn undo<'a>(
+            &'a self,
+            _entry: &'a Entry,
+            _dest_root: &'a Path,
+        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+            Box::pin(async move { Ok(()) })
+        }
+
+        fn progress_target(&self, entry: &Entry, dest_root: &Path) -> Option<PathBuf> {
+            Some(dest_root.join(&entry.relative_path))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_streamed_entry_reports_partial_byte_progress_while_in_flight() {
+        let big = Entry {
+            size: 4000,
+            ..entry("big")
+        };
+        let plan = ExecutionPlan {
+            batches: Vec::new(),
+            streams: vec![StreamJob { entry: big.clone() }],
+        };
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let dest_root = tempdir().unwrap();
+        let outcome = dispatch(
+            plan,
+            GrowingAction,
+            dest_root.path(),
+            ErrorStrategy::ContinueAndCollect,
+            1,
+            CancellationToken::new(),
+            ProgressReporter::new(tx),
+        )
+        .await;
+
+        assert_eq!(outcome.succeeded.len(), 1);
+
+        let mut samples = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            if let Progress::EntryProgress { bytes_copied, .. } = event {
+                samples.push(bytes_copied);
+            }
+        }
+
+        assert!(
+            !samples.is_empty(),
+            "expected at least one in-flight sample over a ~600ms copy"
+        );
+        assert!(
+            samples.windows(2).all(|w| w[0] < w[1]),
+            "samples must be strictly increasing, got {samples:?}"
+        );
+        assert!(
+            samples.iter().all(|&b| b <= big.size),
+            "samples must never exceed the entry size, got {samples:?}"
+        );
+    }
+
+    /// The sampler must stop when its entry does. A leaked poller would
+    /// keep emitting events after the operation resolved.
+    #[tokio::test]
+    async fn sampling_stops_once_the_entry_completes() {
+        let big = Entry {
+            size: 4000,
+            ..entry("big")
+        };
+        let plan = ExecutionPlan {
+            batches: Vec::new(),
+            streams: vec![StreamJob { entry: big }],
+        };
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let dest_root = tempdir().unwrap();
+        dispatch(
+            plan,
+            GrowingAction,
+            dest_root.path(),
+            ErrorStrategy::ContinueAndCollect,
+            1,
+            CancellationToken::new(),
+            ProgressReporter::new(tx),
+        )
+        .await;
+
+        while rx.try_recv().is_ok() {}
+        tokio::time::sleep(PROGRESS_POLL_INTERVAL * 3).await;
+        assert!(
+            rx.try_recv().is_err(),
+            "no events should be emitted after dispatch resolves"
+        );
+    }
+
+    /// Guards the calibration ordering: without it, every batch is queued
+    /// ahead of every stream, and on a many-small-files workload no
+    /// per-byte transfer rate is observable until the run is nearly over.
+    #[tokio::test]
+    async fn the_smallest_stream_is_dispatched_before_any_batch() {
+        let small: Vec<Entry> = (0..6).map(|i| entry(&format!("small{i}"))).collect();
+        let mut plan = single_entry_plan(&small);
+        plan.streams = [("big", 900), ("medium", 500), ("biggest", 1000)]
+            .into_iter()
+            .map(|(name, size)| StreamJob {
+                entry: Entry {
+                    size,
+                    ..entry(name)
+                },
+            })
+            .collect();
+
+        // Concurrency of 1 makes the queue order directly observable in
+        // the log, rather than being blurred by overlapping workers.
+        let (action, log, _) = fake_action(HashMap::new(), HashMap::new());
+        let dest_root = tempdir().unwrap();
+        let outcome = dispatch(
+            plan,
+            action,
+            dest_root.path(),
+            ErrorStrategy::ContinueAndCollect,
+            1,
+            CancellationToken::new(),
+            ProgressReporter::noop(),
+        )
+        .await;
+
+        assert_eq!(outcome.succeeded.len(), 9);
+        let log = log.lock().unwrap();
+        let order: Vec<&str> = log
+            .iter()
+            .filter_map(|line| line.strip_prefix("start:"))
+            .collect();
+        assert_eq!(
+            order.first(),
+            Some(&"medium"),
+            "the smallest stream must run first as a calibration sample; got {order:?}"
+        );
+        // The remaining streams stay behind the batches, as before.
+        assert_eq!(
+            &order[order.len() - 2..],
+            &["big", "biggest"],
+            "remaining streams should still trail the batches; got {order:?}"
+        );
     }
 
     #[tokio::test]

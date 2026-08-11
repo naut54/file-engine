@@ -4,9 +4,26 @@
 //!     cargo run --example basic_copy --features operations -- <source> <dest> [--allow-integrity-risk]
 
 use std::env;
-use std::time::Instant;
 
-use file_engine::{FileEngine, Progress};
+use file_engine::{EtaEstimator, FileEngine, Progress};
+
+/// `1h 02m 03s` / `2m 03s` / `3s` — an ETA is read at a glance, and
+/// `Duration`'s own `{:?}` renders sub-second precision nobody needs here.
+fn format_eta(eta: std::time::Duration) -> String {
+    let total = eta.as_secs();
+    let (h, m, s) = (total / 3600, (total % 3600) / 60, total % 60);
+    if h > 0 {
+        format!("{h}h {m:02}m {s:02}s")
+    } else if m > 0 {
+        format!("{m}m {s:02}s")
+    } else if total < 10 {
+        // Whole seconds would round the entire endgame of a fast copy to
+        // "0s", which reads as finished while work is still running.
+        format!("{:.1}s", eta.as_secs_f64())
+    } else {
+        format!("{s}s")
+    }
+}
 
 #[tokio::main]
 async fn main() -> file_engine::Result<()> {
@@ -44,12 +61,37 @@ async fn main() -> file_engine::Result<()> {
         .allow_filesystem_integrity_risk(allow_integrity_risk)
         .start()?;
 
-    let start = Instant::now();
     let mut completed: usize = 0;
     let mut dirs_completed: usize = 0;
+    let mut eta = EtaEstimator::new();
 
     while let Some(progress) = tokio_stream::StreamExt::next(handle.progress()).await {
+        // Fed every event, including the ones this example doesn't print:
+        // each either reports work done or closes out a span of wall time.
+        eta.observe(&progress);
+
+        let remaining = match eta.estimate() {
+            Some(eta) => format!(", ~{} remaining", format_eta(eta)),
+            // Nothing has completed yet, so there is no measured rate to
+            // extrapolate from. Printing nothing beats printing a number
+            // that will be wrong by an order of magnitude a second later.
+            None => String::new(),
+        };
+
         match progress {
+            Progress::Planned {
+                directories,
+                small_files,
+                small_bytes,
+                large_files,
+                large_bytes,
+                ..
+            } => {
+                println!(
+                    "planned: {directories} directories, {small_files} small files \
+                     ({small_bytes} bytes), {large_files} large files ({large_bytes} bytes)"
+                );
+            }
             Progress::DirectoriesStarted { total } => {
                 println!("creating {total} directories...");
             }
@@ -57,8 +99,8 @@ async fn main() -> file_engine::Result<()> {
                 dirs_completed += 1;
                 if dirs_completed.is_multiple_of(500) {
                     println!(
-                        "...{dirs_completed} directories done ({:?} elapsed)",
-                        start.elapsed()
+                        "...{dirs_completed} directories done ({:?} elapsed{remaining})",
+                        handle.elapsed()
                     );
                 }
             }
@@ -77,22 +119,44 @@ async fn main() -> file_engine::Result<()> {
                 completed += 1;
                 if completed.is_multiple_of(200) {
                     println!(
-                        "...{completed} entries done ({:?} elapsed)",
-                        start.elapsed()
+                        "...{completed} entries done ({:?} elapsed{remaining})",
+                        handle.elapsed()
                     );
                 }
+            }
+            // Sampled while a large file is still being written. This is
+            // the only progress a single-large-file copy produces before
+            // it finishes.
+            Progress::EntryProgress {
+                entry,
+                bytes_copied,
+            } => {
+                let percent = if entry.size > 0 {
+                    bytes_copied as f64 / entry.size as f64 * 100.0
+                } else {
+                    100.0
+                };
+                println!(
+                    "...{} {percent:.0}% ({:?} elapsed{remaining})",
+                    entry.relative_path.display(),
+                    handle.elapsed()
+                );
             }
             Progress::EntryFailed { entry } => {
                 eprintln!("FAILED (during copy): {}", entry.relative_path.display());
             }
+            // `Progress` is `#[non_exhaustive]`: a future variant must not
+            // stop this example compiling.
+            _ => {}
         }
     }
 
     let outcome = handle.await?;
-    let elapsed = start.elapsed();
 
     println!();
-    println!("done in {elapsed:?}");
+    // From the outcome rather than a clock kept here: `handle.await`
+    // consumed the handle, so `handle.elapsed()` is no longer reachable.
+    println!("done in {:?}", outcome.duration);
     println!("succeeded: {}", outcome.succeeded.len());
     println!("failed: {}", outcome.failed.len());
     for (entry, err) in &outcome.failed {

@@ -2,6 +2,7 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Instant;
 
 use tokio::sync::{mpsc, Semaphore};
 use tokio::task::JoinSet;
@@ -68,7 +69,8 @@ impl CompressBuilder {
         let cancel_for_task = cancel.clone();
 
         let join_handle = tokio::spawn(async move {
-            compress(
+            let started = Instant::now();
+            let mut outcome = compress(
                 &self.source,
                 &self.dest,
                 self.format,
@@ -78,7 +80,9 @@ impl CompressBuilder {
                 cancel_for_task,
                 reporter,
             )
-            .await
+            .await?;
+            outcome.duration = started.elapsed();
+            Ok(outcome)
         });
 
         Ok(crate::handle::Handle::new(join_handle, rx, cancel))
@@ -186,6 +190,17 @@ fn compress_gzip_blocking(
         modified: metadata.modified().ok(),
     };
 
+    // Gzip is single-file by definition, and that file is streamed rather
+    // than batched — so it's one large entry regardless of size, and the
+    // threshold reported is 0 to classify it as such.
+    reporter.send(Progress::Planned {
+        directories: 0,
+        small_files: 0,
+        small_bytes: 0,
+        large_files: 1,
+        large_bytes: entry.size,
+        small_file_threshold: 0,
+    });
     reporter.send(Progress::Started {
         bytes_total: Some(entry.size),
         entries_total: 1,
@@ -236,6 +251,19 @@ async fn compress_zip(
     reporter: ProgressReporter,
 ) -> Result<OperationOutcome> {
     let workload = scan(source, small_file_threshold).await?;
+
+    // Captured before `plan()` consumes the workload. No directory term:
+    // a zip stores directory structure as entry paths, so this pipeline
+    // never creates directories and has no pre-pass to account for.
+    reporter.send(Progress::Planned {
+        directories: 0,
+        small_files: workload.small.len(),
+        small_bytes: workload.small.iter().map(|e| e.size).sum(),
+        large_files: workload.large.len(),
+        large_bytes: workload.large.iter().map(|e| e.size).sum(),
+        small_file_threshold,
+    });
+
     let execution_plan = plan(workload, config);
 
     let bytes_total: u64 = execution_plan
@@ -255,10 +283,25 @@ async fn compress_zip(
         .sum::<usize>()
         + execution_plan.streams.len();
 
+    // Smallest stream first, matching `planner::dispatcher` — see the
+    // longer note there. Same reason applies: with every stream queued
+    // behind every batch, a mixed workload produces no per-byte rate until
+    // the run is nearly over. Archive entry order changes as a result,
+    // which is immaterial (zip entries are addressed by name, not
+    // position) and already varied with concurrency before this.
+    let mut streams = execution_plan.streams;
+    let calibration_stream = streams
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, stream)| stream.entry.size)
+        .map(|(index, _)| index)
+        .map(|index| streams.remove(index));
+
     let mut units: Vec<Vec<Entry>> =
-        Vec::with_capacity(execution_plan.batches.len() + execution_plan.streams.len());
+        Vec::with_capacity(execution_plan.batches.len() + streams.len() + 1);
+    units.extend(calibration_stream.map(|s| vec![s.entry]));
     units.extend(execution_plan.batches.into_iter().map(|b| b.entries));
-    units.extend(execution_plan.streams.into_iter().map(|s| vec![s.entry]));
+    units.extend(streams.into_iter().map(|s| vec![s.entry]));
 
     reporter.send(Progress::Started {
         bytes_total: Some(bytes_total),

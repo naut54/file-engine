@@ -9,8 +9,43 @@ use crate::profiler::Entry;
 /// `Clone` (it wraps `std::io::Error`), and the failure detail is already
 /// available from the operation's final `OperationOutcome.failed` once the
 /// handle resolves.
+/// `#[non_exhaustive]`: adding a variant here is otherwise a breaking
+/// change for any downstream exhaustive `match`, which is exactly what
+/// adding `Planned` was. Marked now so the next addition isn't.
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum Progress {
+    /// The shape of the work about to be performed, emitted once per
+    /// phase *before* `DirectoriesStarted` and `Started` — i.e. before
+    /// the directory pre-pass that `Started` doesn't cover.
+    ///
+    /// Exists for cost estimation (`EtaEstimator`): the small/large
+    /// split is the difference between work whose cost is per-file
+    /// (syscall-bound) and work whose cost is per-byte (bandwidth-bound),
+    /// and `Started`'s single `bytes_total` can't distinguish them. A
+    /// consumer that only wants a progress bar can ignore this variant
+    /// entirely.
+    ///
+    /// Not emitted by the delete sweeps (`sync`'s orphan sweep,
+    /// `move_path`'s source cleanup) — those are metadata-only phases
+    /// with no byte-sized work to model, so they emit a bare `Started`.
+    Planned {
+        /// Directories needing an explicit `create_dir_all` — already
+        /// filtered to those with no file beneath them (see
+        /// `pipeline.rs`'s `directories_covered_by_files`), so this
+        /// matches the `DirectoriesStarted { total }` that follows
+        /// rather than the total directory count in the source tree.
+        directories: usize,
+        small_files: usize,
+        small_bytes: u64,
+        large_files: usize,
+        large_bytes: u64,
+        /// The threshold that produced the split above. Carried so a
+        /// consumer can classify each subsequent `Entry` the same way
+        /// the planner did, without having to know what the builder was
+        /// configured with.
+        small_file_threshold: u64,
+    },
     /// Emitted once per phase, before any entries in that phase start.
     /// `bytes_total` is `None` for phases with nothing byte-sized to
     /// report (the delete sweeps). Can be emitted more than once per
@@ -21,6 +56,23 @@ pub enum Progress {
     },
     EntryStarted {
         entry: Entry,
+    },
+    /// Bytes written so far for an entry still in flight, sampled by
+    /// watching the destination file grow. Emitted only for large
+    /// (streamed) entries, and only while they take long enough to be
+    /// sampled at all — a copy that the filesystem satisfies by
+    /// copy-on-write finishes before the first sample and emits none.
+    ///
+    /// `bytes_copied` is cumulative, not a delta, and is clamped to the
+    /// entry's size. It is monotonically non-decreasing per entry.
+    ///
+    /// Exists because `tokio::fs::copy` is opaque while it runs: without
+    /// this, a single large file emits `EntryStarted` and then nothing
+    /// until it finishes, so its transfer rate is unmeasurable for exactly
+    /// as long as it takes to copy.
+    EntryProgress {
+        entry: Entry,
+        bytes_copied: u64,
     },
     EntryCompleted {
         entry: Entry,

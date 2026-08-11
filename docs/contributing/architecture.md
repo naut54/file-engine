@@ -58,10 +58,29 @@ FileEngine::copy(src, dst)
             -> planner::dispatch(plan, CopyAction) -> OperationOutcome
 ```
 
-Progress events (`Progress::Started`, `EntryStarted`/`Completed`/`Failed`,
+Progress events (`Progress::Planned`, `Started`,
+`EntryStarted`/`Completed`/`Failed`,
 `DirectoriesStarted`/`DirectoryCompleted`/`DirectoryFailed`) flow out
 through an unbounded channel the whole way, independent of whether
 anyone's listening.
+
+The `Dispatcher` pulls the smallest stream unit to the front of its queue
+before any batch, and samples each streamed entry's destination file every
+250ms while it runs (`EntryProgress`). Both exist so that a per-byte
+transfer rate is observable early: without the reordering, streams ran
+after every batch and the first one completed at ~95% elapsed; without the
+sampling, a lone large file reported nothing at all until it finished.
+Sampling is used rather than a chunked copy loop so that `fs::copy` keeps
+the kernel's accelerated paths (`clonefile`, `copy_file_range`).
+
+`Planned` is emitted by `run_workload_pipeline` (and by `compress`'s own
+pipeline) before the directory pre-pass, describing the workload split
+that `Started` can't: small files cost per-file, large files cost per-byte,
+and directories cost per-directory. `src/eta.rs`'s `EtaEstimator` consumes
+it to price the three regimes separately — see its type-level docs for why
+a single bytes/sec rate is wrong here, and for the one case (a streamed
+file in flight reporting nothing until it completes) the model handles
+only approximately.
 
 ## Cancellation
 

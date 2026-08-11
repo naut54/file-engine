@@ -63,3 +63,9 @@ different entry sets. If the copy phase stops early (aborted, cancelled,
 or hits a fatal error), the delete phase doesn't run at all — sync would
 rather leave a stale orphan for the next run than delete real data while
 the copy side is in a known-incomplete state.
+
+Each phase carries its own `duration`, so the two don't sum to the whole
+run — the diff that precedes them belongs to neither, and a skipped
+delete phase reports `Duration::ZERO`. Use `Handle::elapsed()` for the
+run as a whole. See
+[progress-and-cancellation.md](progress-and-cancellation.md#time-elapsed).

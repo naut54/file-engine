@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use crate::error::{Error, Result};
@@ -32,6 +32,19 @@ pub(crate) trait EntryAction: Send + Sync {
         entry: &'a Entry,
         dest_root: &'a Path,
     ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+
+    /// The file whose growth tracks this entry's progress, if the action
+    /// has one. The dispatcher samples its size while a streamed entry is
+    /// in flight, to emit `Progress::EntryProgress`.
+    ///
+    /// Defaulted to `None` — an action with no single growing destination
+    /// file simply reports no intermediate progress, rather than being
+    /// forced to invent one. Kept on the trait, rather than derived in the
+    /// dispatcher, so that the mapping from entry to destination path
+    /// stays owned by the action that performs the write.
+    fn progress_target(&self, _entry: &Entry, _dest_root: &Path) -> Option<PathBuf> {
+        None
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +89,10 @@ impl EntryAction for CopyAction {
                 .map(|_| ())
                 .map_err(|e| classify_error(e, &entry.path, entry.size))
         })
+    }
+
+    fn progress_target(&self, entry: &Entry, dest_root: &Path) -> Option<PathBuf> {
+        Some(dest_root.join(&entry.relative_path))
     }
 
     fn undo<'a>(

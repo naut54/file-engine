@@ -35,6 +35,12 @@ configures the operation, `.start()` spawns it as a background task and
 returns a handle immediately, and the handle exposes a `Progress` stream
 plus cooperative cancellation via `.cancel()`.
 
+Feed that stream to an `EtaEstimator` for a predicted time remaining. It
+models batched small files (cost per file), streamed large files (cost
+per byte), and the directory pre-pass (cost per directory) separately,
+because a single bytes-per-second figure describes none of them well.
+See [`docs/guide/progress-and-cancellation.md`](docs/guide/progress-and-cancellation.md).
+
 Copying across filesystems (e.g. onto a FAT32/exFAT drive) is checked for
 several failure modes up front — case-insensitive-destination collisions,
 Windows-reserved filenames, destination file-size limits, and a known

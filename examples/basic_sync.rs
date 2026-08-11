@@ -12,7 +12,6 @@
 //! incomplete state.
 
 use std::env;
-use std::time::Instant;
 
 use file_engine::{FileEngine, Progress};
 
@@ -48,7 +47,6 @@ async fn main() -> file_engine::Result<()> {
         .allow_filesystem_integrity_risk(allow_integrity_risk)
         .start()?;
 
-    let start = Instant::now();
     let mut completed: usize = 0;
 
     // Both the copy and delete phases send events through the same
@@ -71,7 +69,7 @@ async fn main() -> file_engine::Result<()> {
                 if completed.is_multiple_of(200) {
                     println!(
                         "...{completed} entries done ({:?} elapsed)",
-                        start.elapsed()
+                        handle.elapsed()
                     );
                 }
             }
@@ -81,14 +79,22 @@ async fn main() -> file_engine::Result<()> {
             Progress::DirectoryFailed { path } => {
                 eprintln!("FAILED (creating directory): {}", path.display());
             }
+            // `Progress` is `#[non_exhaustive]`; see `basic_copy.rs` for
+            // what `Progress::Planned` carries and how to use it.
+            _ => {}
         }
     }
 
     let sync_outcome = handle.await?;
-    let elapsed = start.elapsed();
 
     println!();
-    println!("done in {elapsed:?}");
+    // Timed per phase, so these two don't add up to the whole run — the
+    // diff that precedes them is counted in neither, and a delete phase
+    // skipped because the copy phase stopped early reports zero.
+    println!(
+        "done in {:?} (copy) + {:?} (delete)",
+        sync_outcome.copy.duration, sync_outcome.delete.duration
+    );
 
     println!(
         "copy phase: succeeded {}, failed {}",

@@ -1,6 +1,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
 
 use tokio::task::JoinHandle;
 use tokio_stream::wrappers::UnboundedReceiverStream;
@@ -17,6 +18,12 @@ pub struct Handle<T> {
     join_handle: JoinHandle<Result<T>>,
     progress: UnboundedReceiverStream<Progress>,
     cancel: CancellationToken,
+    started: Instant,
+    /// Set the first time `poll` sees the task finish, so `elapsed()`
+    /// stops growing once there's no work left to time. Only reachable
+    /// for a handle polled without being consumed (`Pin::new(&mut
+    /// handle).await`, `select!`) — `handle.await` takes it by value.
+    finished: Option<Instant>,
 }
 
 impl<T> Handle<T> {
@@ -29,11 +36,31 @@ impl<T> Handle<T> {
             join_handle,
             progress: UnboundedReceiverStream::new(progress),
             cancel,
+            // Every call site constructs the `Handle` immediately after
+            // `tokio::spawn`, so this is the closest the caller can get
+            // to when the work actually began.
+            started: Instant::now(),
+            finished: None,
         }
     }
 
     pub fn progress(&mut self) -> &mut (impl Stream<Item = Progress> + Unpin) {
         &mut self.progress
+    }
+
+    /// Wall time since the operation was spawned, for displaying
+    /// "elapsed" next to `EtaEstimator`'s "remaining". Frozen once the
+    /// handle has been polled to completion, so it reads as the
+    /// operation's total duration rather than continuing to climb.
+    ///
+    /// Measures the whole run, including the directory pre-pass that
+    /// precedes the first `Started` event — so it does not line up with
+    /// a timer started on the first event off `progress()`.
+    pub fn elapsed(&self) -> Duration {
+        match self.finished {
+            Some(finished) => finished.saturating_duration_since(self.started),
+            None => self.started.elapsed(),
+        }
     }
 
     /// Cooperative. Detached-on-drop: dropping the `Handle` without
@@ -50,7 +77,10 @@ impl<T> Future for Handle<T> {
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let this = self.get_mut();
         match Pin::new(&mut this.join_handle).poll(cx) {
-            Poll::Ready(Ok(result)) => Poll::Ready(result),
+            Poll::Ready(Ok(result)) => {
+                this.finished.get_or_insert_with(Instant::now);
+                Poll::Ready(result)
+            }
             // The task panicked (dispatcher.rs's own internal
             // `.expect()`s already treat that as unrecoverable) or was
             // aborted (never happens — nothing calls `.abort()` on this
@@ -154,6 +184,43 @@ mod tests {
             2,
             "task should have run to completion despite the handle being dropped"
         );
+    }
+
+    #[tokio::test]
+    async fn elapsed_grows_while_the_operation_runs() {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let join_handle = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok::<_, crate::error::Error>(())
+        });
+        let handle = Handle::new(join_handle, rx, CancellationToken::new());
+
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        let first = handle.elapsed();
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        assert!(first >= Duration::from_millis(20));
+        assert!(handle.elapsed() > first);
+    }
+
+    #[tokio::test]
+    async fn elapsed_freezes_once_the_task_has_completed() {
+        let (_tx, rx) = mpsc::unbounded_channel();
+        let join_handle = tokio::spawn(async {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            Ok::<_, crate::error::Error>(())
+        });
+        let mut handle = Handle::new(join_handle, rx, CancellationToken::new());
+
+        // Polled by reference rather than `handle.await`, which would
+        // consume the handle and leave nothing to call `elapsed()` on.
+        Pin::new(&mut handle).await.unwrap();
+        let at_completion = handle.elapsed();
+
+        tokio::time::sleep(Duration::from_millis(30)).await;
+
+        assert!(at_completion >= Duration::from_millis(20));
+        assert_eq!(handle.elapsed(), at_completion);
     }
 
     fn test_entry() -> crate::profiler::Entry {

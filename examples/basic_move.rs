@@ -10,7 +10,6 @@
 //! cross-filesystem fallback.
 
 use std::env;
-use std::time::Instant;
 
 use file_engine::{FileEngine, Progress};
 
@@ -54,7 +53,6 @@ async fn main() -> file_engine::Result<()> {
         .allow_filesystem_integrity_risk(allow_integrity_risk)
         .start()?;
 
-    let start = Instant::now();
     let mut completed: usize = 0;
     let mut dirs_completed: usize = 0;
 
@@ -68,7 +66,7 @@ async fn main() -> file_engine::Result<()> {
                 if dirs_completed.is_multiple_of(500) {
                     println!(
                         "...{dirs_completed} directories done ({:?} elapsed)",
-                        start.elapsed()
+                        handle.elapsed()
                     );
                 }
             }
@@ -88,21 +86,25 @@ async fn main() -> file_engine::Result<()> {
                 if completed.is_multiple_of(200) {
                     println!(
                         "...{completed} entries done ({:?} elapsed)",
-                        start.elapsed()
+                        handle.elapsed()
                     );
                 }
             }
             Progress::EntryFailed { entry } => {
                 eprintln!("FAILED (during move): {}", entry.relative_path.display());
             }
+            // `Progress` is `#[non_exhaustive]`; see `basic_copy.rs` for
+            // what `Progress::Planned` carries and how to use it.
+            _ => {}
         }
     }
 
     let outcome = handle.await?;
-    let elapsed = start.elapsed();
 
     println!();
-    println!("done in {elapsed:?}");
+    // From the outcome rather than a clock kept here: `handle.await`
+    // consumed the handle, so `handle.elapsed()` is no longer reachable.
+    println!("done in {:?}", outcome.duration);
     println!("succeeded: {}", outcome.succeeded.len());
     println!("failed: {}", outcome.failed.len());
     for (entry, err) in &outcome.failed {

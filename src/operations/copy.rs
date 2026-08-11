@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
@@ -101,7 +102,8 @@ impl CopyBuilder {
         let cancel_for_task = cancel.clone();
 
         let join_handle = tokio::spawn(async move {
-            run_copy_pipeline(
+            let started = Instant::now();
+            let mut outcome = run_copy_pipeline(
                 &self.source,
                 &self.dest,
                 self.overwrite,
@@ -113,7 +115,9 @@ impl CopyBuilder {
                 cancel_for_task,
                 reporter,
             )
-            .await
+            .await?;
+            outcome.duration = started.elapsed();
+            Ok(outcome)
         });
 
         Ok(Handle::new(join_handle, rx, cancel))

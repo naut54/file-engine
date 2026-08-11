@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
@@ -89,7 +90,8 @@ impl MoveBuilder {
         let cancel_for_task = cancel.clone();
 
         let join_handle = tokio::spawn(async move {
-            move_path(
+            let started = Instant::now();
+            let mut outcome = move_path(
                 &self.source,
                 &self.dest,
                 self.overwrite,
@@ -102,7 +104,9 @@ impl MoveBuilder {
                 reporter,
                 &TokioRenamer,
             )
-            .await
+            .await?;
+            outcome.duration = started.elapsed();
+            Ok(outcome)
         });
 
         Ok(crate::handle::Handle::new(join_handle, rx, cancel))

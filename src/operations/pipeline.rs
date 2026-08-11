@@ -41,6 +41,7 @@ pub(crate) async fn run_copy_pipeline(
         overwrite,
         preserve_permissions,
         allow_filesystem_integrity_risk,
+        small_file_threshold,
         config,
         concurrency,
         cancel,
@@ -74,6 +75,12 @@ pub(crate) async fn run_workload_pipeline(
     overwrite: bool,
     preserve_permissions: bool,
     allow_filesystem_integrity_risk: bool,
+    // Only used to report the split back out via `Progress::Planned` —
+    // the partition itself already happened, in `scan()` or in `sync`'s
+    // `Workload::partition`. Passed rather than inferred because the two
+    // callers both have it and the boundary between `workload.small` and
+    // `workload.large` isn't recoverable from the partitioned lists.
+    small_file_threshold: u64,
     config: &BatchConfig,
     concurrency: usize,
     cancel: CancellationToken,
@@ -152,6 +159,22 @@ pub(crate) async fn run_workload_pipeline(
         .filter(|dir| !covered.contains(&dir.relative_path))
         .cloned()
         .collect();
+
+    // Emitted here rather than next to `dispatch()`'s `Started`: this is
+    // the last point at which the *whole* remaining phase is still ahead,
+    // including the directory pass below — which `Started` (emitted after
+    // it, and counting only file entries) can't describe. Deliberately
+    // after the early-return above, so a run that stops on rejected
+    // entries announces no plan it isn't going to execute.
+    reporter.send(Progress::Planned {
+        directories: dirs_needing_creation.len(),
+        small_files: workload.small.len(),
+        small_bytes: workload.small.iter().map(|e| e.size).sum(),
+        large_files: workload.large.len(),
+        large_bytes: workload.large.iter().map(|e| e.size).sum(),
+        small_file_threshold,
+    });
+
     directories_failed.extend(
         ensure_directories_exist(&dirs_needing_creation, dest, concurrency, &reporter).await,
     );
@@ -360,6 +383,7 @@ mod tests {
     use crate::planner::ErrorStrategy;
     #[cfg(all(unix, feature = "permissions"))]
     use crate::profiler::DirEntry;
+    use crate::profiler::DEFAULT_SMALL_FILE_THRESHOLD;
 
     use super::*;
 
@@ -730,6 +754,7 @@ mod tests {
             false,
             false,
             false,
+            DEFAULT_SMALL_FILE_THRESHOLD,
             &BatchConfig::default(), // default: ErrorStrategy::ContinueAndCollect
             2,
             CancellationToken::new(),
@@ -811,6 +836,7 @@ mod tests {
             false,
             false,
             false,
+            DEFAULT_SMALL_FILE_THRESHOLD,
             &config,
             2,
             CancellationToken::new(),
@@ -865,6 +891,7 @@ mod tests {
             false,
             false,
             false, // allow_filesystem_integrity_risk
+            DEFAULT_SMALL_FILE_THRESHOLD,
             &BatchConfig::default(),
             2,
             CancellationToken::new(),
@@ -893,6 +920,7 @@ mod tests {
             false,
             false,
             true, // allow_filesystem_integrity_risk
+            DEFAULT_SMALL_FILE_THRESHOLD,
             &BatchConfig::default(),
             2,
             CancellationToken::new(),

@@ -1,5 +1,7 @@
 mod error;
 #[cfg(feature = "operations")]
+mod eta;
+#[cfg(feature = "operations")]
 mod handle;
 // `sync`/`compress` already imply `operations` via Cargo.toml, but
 // `watch` deliberately doesn't (it never touches the
@@ -24,6 +26,8 @@ mod watch_event;
 mod watch_handle;
 
 pub use error::{Error, Result};
+#[cfg(feature = "operations")]
+pub use eta::EtaEstimator;
 #[cfg(feature = "operations")]
 pub use handle::Handle;
 #[cfg(feature = "operations")]
@@ -132,6 +136,31 @@ mod tests {
             .position(|e| matches!(e, Progress::Started { .. }));
         assert!(started_at.is_some(), "expected a Started event");
 
+        // `Planned` has to precede everything, including the directory
+        // pre-pass — an ETA that only sees `Started` misses that phase
+        // entirely, which is the whole reason the variant exists.
+        let planned_at = events
+            .iter()
+            .position(|e| matches!(e, Progress::Planned { .. }))
+            .expect("expected a Planned event");
+        assert_eq!(planned_at, 0, "Planned must be the first event");
+
+        let planned_entries = events
+            .iter()
+            .find_map(|e| match e {
+                Progress::Planned {
+                    small_files,
+                    large_files,
+                    ..
+                } => Some(small_files + large_files),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            planned_entries, expected_entries,
+            "Planned's file counts must agree with what actually ran"
+        );
+
         if let Some(first_entry_started) = events
             .iter()
             .position(|e| matches!(e, Progress::EntryStarted { .. }))
@@ -185,6 +214,10 @@ mod tests {
         assert_eq!(outcome.succeeded.len(), 1);
         assert_eq!(fs::read(dest_dir.path().join("a.txt")).unwrap(), b"hello");
         assert_well_formed(&events, 1);
+        assert!(
+            outcome.duration > std::time::Duration::ZERO,
+            "duration should be stamped by the time the handle resolves"
+        );
     }
 
     #[tokio::test]
@@ -208,6 +241,8 @@ mod tests {
         assert!(outcome.succeeded.is_empty());
         assert!(!src_file.exists());
         assert_eq!(fs::read(&dest_file).unwrap(), b"hello");
+        // Stamped even on the rename fast path, which enumerates nothing.
+        assert!(outcome.duration > std::time::Duration::ZERO);
     }
 
     #[tokio::test]
@@ -228,6 +263,9 @@ mod tests {
         assert_eq!(outcome.delete.succeeded.len(), 1);
         assert_eq!(fs::read(dest_dir.path().join("new.txt")).unwrap(), b"new");
         assert!(!dest_dir.path().join("orphan.txt").exists());
+        // Timed per phase, so both ran and neither inherited the other's.
+        assert!(outcome.copy.duration > std::time::Duration::ZERO);
+        assert!(outcome.delete.duration > std::time::Duration::ZERO);
     }
 
     #[tokio::test]
@@ -250,5 +288,6 @@ mod tests {
         assert_eq!(outcome.succeeded.len(), 1);
         assert!(dest.exists());
         assert_well_formed(&events, 1);
+        assert!(outcome.duration > std::time::Duration::ZERO);
     }
 }

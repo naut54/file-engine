@@ -1,5 +1,6 @@
 use std::io;
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
@@ -16,7 +17,11 @@ use super::pipeline::run_workload_pipeline;
 /// rather than merged: sync's delete phase acts on dest-only orphans, a
 /// genuinely different entry set from what the copy phase touched
 /// (unlike move's sweep, which deletes the entries it just copied).
+/// `#[non_exhaustive]` for the same reason as `OperationOutcome`: an
+/// output type, so blocking downstream construction costs nothing and
+/// leaves room to report a future phase without a major version.
 #[derive(Debug, Default)]
+#[non_exhaustive]
 pub struct SyncOutcome {
     pub copy: OperationOutcome,
     pub delete: OperationOutcome,
@@ -161,23 +166,35 @@ async fn sync(
     let sync_plan = diff(source, dest, diff_strategy, dest_caps.timestamp_granularity).await?;
 
     let copy_workload = Workload::partition(sync_plan.to_copy, small_file_threshold);
-    let copy = run_workload_pipeline(
+    // Timed per phase rather than stamping both outcomes with the whole
+    // run: the two phases cost very differently (bulk transfer vs. a
+    // metadata-only sweep), and a caller comparing them is the reason to
+    // expose the figure at all. The diff above belongs to neither and is
+    // counted in neither — `Handle::elapsed()` covers the whole run.
+    let copy_started = Instant::now();
+    let mut copy = run_workload_pipeline(
         copy_workload,
         dest,
         &dest_caps,
         overwrite,
         preserve_permissions,
         allow_filesystem_integrity_risk,
+        small_file_threshold,
         config,
         concurrency,
         cancel,
         reporter.clone(),
     )
     .await?;
+    copy.duration = copy_started.elapsed();
 
     let delete = if copy.stopped_early.is_none() {
-        delete_sweep(sync_plan.to_delete, config.error_strategy, reporter).await
+        let delete_started = Instant::now();
+        let mut delete = delete_sweep(sync_plan.to_delete, config.error_strategy, reporter).await;
+        delete.duration = delete_started.elapsed();
+        delete
     } else {
+        // Skipped, so it keeps the default `Duration::ZERO`.
         OperationOutcome::default()
     };
 
@@ -281,6 +298,7 @@ fn classify_error(err: io::Error, path: &Path) -> Error {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::time::Duration;
 
     use tempfile::tempdir;
 
@@ -403,6 +421,11 @@ mod tests {
         assert!(outcome.copy.stopped_early.is_some());
         assert!(outcome.delete.succeeded.is_empty());
         assert!(outcome.delete.failed.is_empty());
+        assert_eq!(
+            outcome.delete.duration,
+            Duration::ZERO,
+            "a phase that never ran should report no duration"
+        );
         assert!(
             dest.path().join("orphan.txt").exists(),
             "orphan should be left in place when the copy phase didn't complete"
