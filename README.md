@@ -41,6 +41,17 @@ per byte), and the directory pre-pass (cost per directory) separately,
 because a single bytes-per-second figure describes none of them well.
 See [`docs/guide/progress-and-cancellation.md`](docs/guide/progress-and-cancellation.md).
 
+`FileEngine::analyze()` inspects a path without touching it — file/
+directory counts, total size, largest files, and extension/age
+breakdowns, narrowed with filters (extension, glob excludes, size range,
+modified-time range, depth). With the `checksum` feature, it can also
+group files by content hash to surface duplicates:
+
+```rust
+let report = engine.analyze("some/dir").detect_duplicates(true).start()?.await?;
+println!("{} files, {} bytes wasted on duplicates", report.file_count, report.duplicate_bytes_wasted);
+```
+
 Copying across filesystems (e.g. onto a FAT32/exFAT drive) is checked for
 several failure modes up front — case-insensitive-destination collisions,
 Windows-reserved filenames, destination file-size limits, and a known
@@ -57,11 +68,11 @@ feature flags.
 | --- | --- | --- |
 | `operations` *(default)* | `copy`, `move_path` | Also pulls in filesystem-capability detection (used by `copy`/`move`/`sync`). |
 | `sync` | `FileEngine::sync()` | Implies `operations`. |
-| `checksum` | `DiffStrategy::Checksum` for `sync` | Content-hash comparison instead of size+mtime. |
+| `checksum` | `DiffStrategy::Checksum` for `sync`; `.detect_duplicates()` for `analyze` | Content-hash (blake3) comparison/grouping instead of size+mtime. |
 | `watch` | `FileEngine::watch()` | Does **not** require `operations` — watching doesn't use the batching pipeline. |
 | `compress` | `FileEngine::compress()` | Zip or gzip, inferred from the destination extension or set explicitly via `CompressFormat`. No decompress support yet. |
 | `permissions` | `.preserve_permissions()` on copy/move/sync | Unix only. Mode bits, not ownership. |
-| `analyze` *(default)* | — | Reserved for a future standalone inspection API; not yet implemented — enabling it currently does nothing observable. |
+| `analyze` *(default)* | `FileEngine::analyze()` | Read-only tree inspection — counts, total size, largest files, extension/age breakdowns, with filters. `checksum` additionally enables duplicate detection. |
 | `diagnostics` | — | Reserved for `error-engine` message-catalog integration; not yet implemented. |
 
 ## Documentation

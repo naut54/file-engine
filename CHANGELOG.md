@@ -4,6 +4,70 @@ All notable changes to this project are documented here.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0]
+
+### Added
+
+- **`FileEngine::analyze()`** — read-only tree inspection: file/directory
+  counts, total size, the largest N files, size and count grouped by
+  extension, an age histogram (last-modified bucketed into
+  under-a-day/week/month/year/older), plus filters (extension,
+  glob-based excludes, size range, modified-time range, max depth,
+  symlink-following) so a caller narrows what gets counted rather than
+  filtering a full report after the fact. Feature `analyze`, on by
+  default — it was already reserved in `Cargo.toml` but unimplemented
+  until now.
+
+  Follows the same builder shape as every other operation
+  (`FileEngine::analyze(path)...start()`), but returns a dedicated
+  `AnalysisHandle`/`AnalysisProgress` pair rather than the existing
+  `Handle<T>`/`Progress`: those are hard-coded to each other, and both
+  live behind the `operations` feature, which `analyze` deliberately
+  doesn't require — the same reasoning `WatchHandle` already established
+  for `watch`.
+
+  Excluded directories (`.exclude_globs()`, backed by `globset`) prune
+  traversal itself rather than being filtered out after a full walk, and
+  `max_depth` passes straight through to `walkdir`'s own depth-limiting
+  for the same reason. A per-entry error (a permission-denied
+  subdirectory, a symlink loop under `.follow_symlinks(true)`) is
+  handled per `.on_error(AnalysisErrorStrategy)`, distinct from
+  `planner::ErrorStrategy` since analysis never writes anything and
+  `Undo` has no meaning here.
+
+- **`.detect_mime_types(bool)`** (feature `analyze`) and
+  **`.detect_duplicates(bool)`** (feature `checksum`) on
+  `AnalyzeBuilder` — both off by default, since either turns the walk
+  from metadata-only into a full extra read per matched file. Duplicate
+  detection groups candidates by size first (two files can only be
+  byte-identical if they're the same size) and only blake3-hashes files
+  that actually collide, with hashing bounded by `.hash_concurrency(n)`
+  (same `Arc<Semaphore>` pattern the batching pipeline already uses for
+  its own worker pool).
+
+- **`AnalysisReport::errors`/`errors_total`** and (feature `checksum`)
+  **`AnalysisReport::duplicates`/`duplicate_groups_total`/
+  `duplicate_bytes_wasted`** — the detailed lists are capped
+  (`.max_reported_errors()`, `.max_reported_duplicates()`) so a badly
+  permissioned or heavily duplicated tree can't grow the report
+  unboundedly, but the counts and `duplicate_bytes_wasted` stay uncapped
+  and accurate even once the sample is truncated — the wasted-space
+  figure in particular is summed over every duplicate group found, not
+  just the ones that made it into the capped list.
+
+- **`FE_INVALID_GLOB_PATTERN`** in `errors.toml`, backing
+  `Error::InvalidGlobPattern` — an invalid pattern passed to
+  `.exclude_globs()`.
+
+### Changed
+
+- The README's feature table no longer describes `analyze` as
+  unimplemented.
+
+### Fixed
+
+- Nothing user-visible; 2.1.0 is additive.
+
 ## [2.0.0]
 
 ### Upgrading from 1.x

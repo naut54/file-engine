@@ -1,6 +1,6 @@
 [package]
 name = "file-engine"
-version = "2.0.0"
+version = "2.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
@@ -21,7 +21,7 @@ default     = ["operations", "analyze"]
 # filesystem-capability detection isn't optional preservation behavior,
 # it's a correctness pre-flight check.
 operations  = ["dep:walkdir", "dep:libc", "dep:windows-sys", "dep:unicode-normalization"]
-analyze     = ["dep:walkdir", "dep:infer"]
+analyze     = ["dep:walkdir", "dep:infer", "dep:globset"]
 checksum    = ["analyze", "dep:blake3"]
 watch       = ["dep:notify"]
 compress    = ["operations", "dep:zip", "dep:flate2"]
@@ -40,6 +40,7 @@ thiserror = "1"
 
 walkdir      = { version = "2",   optional = true }
 infer        = { version = "0.16", optional = true }
+globset      = { version = "0.4", optional = true }
 blake3       = { version = "1",   optional = true }
 notify       = { version = "6",   optional = true }
 zip          = { version = "2",   optional = true }

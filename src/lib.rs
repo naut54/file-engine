@@ -1,3 +1,5 @@
+#[cfg(feature = "analyze")]
+mod analysis;
 mod error;
 #[cfg(feature = "operations")]
 mod eta;
@@ -25,6 +27,15 @@ mod watch_event;
 #[cfg(feature = "watch")]
 mod watch_handle;
 
+#[cfg(feature = "analyze")]
+pub use analysis::Entry as AnalyzedEntry;
+#[cfg(feature = "analyze")]
+pub use analysis::{
+    AgeBuckets, AnalysisErrorStrategy, AnalysisHandle, AnalysisProgress, AnalysisReport,
+    AnalyzeBuilder, ExtensionStats, MimeStats, DEFAULT_MAX_REPORTED_ERRORS, DEFAULT_TOP_N_LARGEST,
+};
+#[cfg(feature = "checksum")]
+pub use analysis::{DuplicateGroup, DEFAULT_MAX_REPORTED_DUPLICATE_GROUPS};
 pub use error::{Error, Result};
 #[cfg(feature = "operations")]
 pub use eta::EtaEstimator;
@@ -105,6 +116,11 @@ impl FileEngine {
         dest: impl Into<std::path::PathBuf>,
     ) -> SyncBuilder {
         SyncBuilder::new(source, dest)
+    }
+
+    #[cfg(feature = "analyze")]
+    pub fn analyze(&self, path: impl Into<std::path::PathBuf>) -> AnalyzeBuilder {
+        AnalyzeBuilder::new(path)
     }
 
     #[cfg(feature = "compress")]
@@ -289,5 +305,79 @@ mod tests {
         assert!(dest.exists());
         assert_well_formed(&events, 1);
         assert!(outcome.duration > std::time::Duration::ZERO);
+    }
+}
+
+#[cfg(all(test, feature = "analyze"))]
+mod analyze_tests {
+    use std::fs;
+
+    use tempfile::tempdir;
+    use tokio_stream::StreamExt;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn analyze_end_to_end_through_the_public_api() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), vec![0u8; 10]).unwrap();
+        fs::write(dir.path().join("b.log"), vec![0u8; 20]).unwrap();
+
+        let engine = FileEngine::new();
+        let mut handle = engine.analyze(dir.path()).start().unwrap();
+
+        let mut progress_events = 0;
+        while (handle.progress().next().await).is_some() {
+            progress_events += 1;
+        }
+
+        let report = handle.await.unwrap();
+
+        assert_eq!(report.file_count, 2);
+        assert_eq!(report.total_size, 30);
+        assert_eq!(progress_events, 2);
+        assert_eq!(report.errors_total, 0);
+        assert!(report.duration > std::time::Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn extension_filter_narrows_the_report() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), b"x").unwrap();
+        fs::write(dir.path().join("b.log"), b"x").unwrap();
+
+        let engine = FileEngine::new();
+        let report = engine
+            .analyze(dir.path())
+            .extensions(["txt"])
+            .start()
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(report.file_count, 1);
+    }
+
+    #[cfg(feature = "checksum")]
+    #[tokio::test]
+    async fn duplicate_detection_finds_identical_content_by_hash_not_name() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), b"same content").unwrap();
+        fs::write(dir.path().join("b.txt"), b"same content").unwrap();
+        fs::write(dir.path().join("c.txt"), b"different").unwrap();
+
+        let engine = FileEngine::new();
+        let report = engine
+            .analyze(dir.path())
+            .detect_duplicates(true)
+            .start()
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(report.duplicate_groups_total, 1);
+        assert_eq!(report.duplicates.len(), 1);
+        assert_eq!(report.duplicates[0].paths.len(), 2);
+        assert_eq!(report.duplicate_bytes_wasted, "same content".len() as u64);
     }
 }

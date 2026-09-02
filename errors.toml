@@ -38,3 +38,7 @@ template = "filename is reserved or invalid on the destination filesystem: {path
 [FE_FILESYSTEM_INTEGRITY_RISK]
 template = "destination filesystem ({filesystem}) has a known write-integrity issue on this platform"
 hint = "Pass `.allow_filesystem_integrity_risk(true)` to proceed anyway."
+
+[FE_INVALID_GLOB_PATTERN]
+template = "invalid glob pattern {pattern:?}: {source}"
+hint = "Check the pattern passed to `.exclude_globs(...)` is valid glob syntax."

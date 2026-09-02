@@ -27,6 +27,13 @@ pub enum Error {
     #[error("could not infer compression format from destination: {path}")]
     UnknownCompressFormat { path: PathBuf },
 
+    #[cfg(feature = "analyze")]
+    #[error("invalid glob pattern {pattern:?}: {source}")]
+    InvalidGlobPattern {
+        pattern: String,
+        source: globset::Error,
+    },
+
     #[cfg(feature = "compress")]
     #[error("gzip compression requires a single file, got a directory: {path}")]
     GzipRequiresFile { path: PathBuf },
