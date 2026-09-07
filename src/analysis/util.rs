@@ -15,7 +15,7 @@ pub(crate) fn classify_io_error(err: io::Error, path: PathBuf) -> Error {
     }
 }
 
-pub(crate) fn classify_walkdir_error(err: walkdir::Error) -> Error {
+pub(crate) fn classify_jwalk_error(err: jwalk::Error) -> Error {
     let path = err.path().map(|p| p.to_path_buf());
     match err.into_io_error() {
         Some(io_err) => classify_io_error(io_err, path.unwrap_or_default()),
@@ -26,11 +26,11 @@ pub(crate) fn classify_walkdir_error(err: walkdir::Error) -> Error {
     }
 }
 
-/// Default worker pool size for concurrent hashing during duplicate
-/// detection. Duplicated from `operations::default_concurrency` for the
-/// same reason as `classify_io_error` above — that helper lives behind
-/// `operations`, which `checksum` doesn't require.
-#[cfg(feature = "checksum")]
+/// Default worker pool size for both the parallel tree walk (`walk.rs`)
+/// and concurrent hashing during duplicate detection (`hash.rs`).
+/// Duplicated from `operations::default_concurrency` for the same reason
+/// as `classify_io_error` above — that helper lives behind `operations`,
+/// which `analyze` doesn't require.
 pub(crate) fn default_concurrency() -> usize {
     std::thread::available_parallelism()
         .map(|n| n.get())

@@ -1,6 +1,6 @@
 [package]
 name = "file-engine"
-version = "2.1.0"
+version = "2.2.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
@@ -21,7 +21,13 @@ default     = ["operations", "analyze"]
 # filesystem-capability detection isn't optional preservation behavior,
 # it's a correctness pre-flight check.
 operations  = ["dep:walkdir", "dep:libc", "dep:windows-sys", "dep:unicode-normalization"]
-analyze     = ["dep:walkdir", "dep:infer", "dep:globset"]
+# `jwalk` rather than `walkdir`: analyze's walk is read-only stat/aggregate
+# work over the whole tree, exactly the shape jwalk's rayon-backed parallel
+# directory reads help most on large trees (see `AnalyzeBuilder::walk_concurrency`).
+# `operations` keeps `walkdir` separately for `profiler::scan`, which is fine
+# with a single-threaded walk since it's paired 1:1 with a copy/move pipeline
+# that's already the bottleneck.
+analyze     = ["dep:jwalk", "dep:infer", "dep:globset"]
 checksum    = ["analyze", "dep:blake3"]
 watch       = ["dep:notify"]
 compress    = ["operations", "dep:zip", "dep:flate2"]
@@ -39,6 +45,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 thiserror = "1"
 
 walkdir      = { version = "2",   optional = true }
+jwalk        = { version = "0.9", optional = true }
 infer        = { version = "0.16", optional = true }
 globset      = { version = "0.4", optional = true }
 blake3       = { version = "1",   optional = true }

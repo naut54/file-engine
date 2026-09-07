@@ -4,6 +4,29 @@ All notable changes to this project are documented here.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0]
+
+### Changed
+
+- **`analyze()`'s tree walk is now multithreaded.** Replaced `walkdir`
+  with `jwalk` under the `analyze` feature: directory reads and `stat()`
+  calls now run across a worker pool instead of one at a time on a
+  single thread. Aggregation (the largest-files heap, extension/MIME
+  stats, age buckets) still happens serially on the consuming task, so
+  no locking was introduced there — only the underlying directory
+  traversal is parallelized. On a 330k-file/138k-dir local tree this cut
+  wall time from 12.8s (single-threaded, 45% CPU) to 9.0s (194% CPU)
+  with a warm disk cache; the gap widens further on cold caches or
+  network filesystems, where per-`stat()` latency (not local CPU) is the
+  bottleneck. `profiler::scan` (feature `operations`) is unaffected — it
+  still uses `walkdir`.
+
+### Added
+
+- **`AnalyzeBuilder::walk_concurrency(n)`** — worker-thread count for the
+  parallel walk, defaulting to `available_parallelism()`, matching
+  `.hash_concurrency()`.
+
 ## [2.1.0]
 
 ### Added

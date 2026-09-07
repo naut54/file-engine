@@ -10,6 +10,7 @@ use super::filter::AnalysisFilter;
 use super::handle::AnalysisHandle;
 use super::progress::AnalysisProgressReporter;
 use super::report::{AnalysisReport, DEFAULT_MAX_REPORTED_ERRORS};
+use super::util::default_concurrency;
 use super::walk::{walk, WalkParams};
 
 #[cfg(feature = "checksum")]
@@ -29,6 +30,7 @@ pub struct AnalyzeBuilder {
     top_n_largest: usize,
     detect_mime_types: bool,
     max_reported_errors: usize,
+    walk_concurrency: Option<usize>,
     #[cfg(feature = "checksum")]
     detect_duplicates: bool,
     #[cfg(feature = "checksum")]
@@ -48,6 +50,7 @@ impl AnalyzeBuilder {
             top_n_largest: DEFAULT_TOP_N_LARGEST,
             detect_mime_types: false,
             max_reported_errors: DEFAULT_MAX_REPORTED_ERRORS,
+            walk_concurrency: None,
             #[cfg(feature = "checksum")]
             detect_duplicates: false,
             #[cfg(feature = "checksum")]
@@ -99,18 +102,32 @@ impl AnalyzeBuilder {
 
     /// Bounds how far the walk descends: the analyzed root is depth 0,
     /// its immediate children depth 1, and so on — passed straight
-    /// through to `walkdir`'s own `max_depth`, which prunes traversal
-    /// past the bound rather than filtering after the fact.
+    /// through to `jwalk`'s own `max_depth`, which prunes traversal past
+    /// the bound rather than filtering after the fact.
     pub fn max_depth(mut self, depth: usize) -> Self {
         self.max_depth = Some(depth);
         self
     }
 
-    /// Off by default. When enabled, `walkdir`'s own loop detection
+    /// Off by default. When enabled, `jwalk`'s own loop detection
     /// surfaces a symlink cycle as a per-entry error, handled like any
     /// other error via `.on_error()`.
     pub fn follow_symlinks(mut self, follow: bool) -> Self {
         self.follow_symlinks = follow;
+        self
+    }
+
+    /// How many worker threads `jwalk` uses to read directories and stat
+    /// entries concurrently while walking. Defaults to
+    /// `available_parallelism()`, matching `hash_concurrency`.
+    ///
+    /// Traversal is still reported (and aggregated into `AnalysisReport`)
+    /// in a single stream on the calling task — this only parallelizes
+    /// the underlying directory reads and `stat` calls, which is where
+    /// wall time actually goes on large trees or slow/network
+    /// filesystems.
+    pub fn walk_concurrency(mut self, n: usize) -> Self {
+        self.walk_concurrency = Some(n);
         self
     }
 
@@ -186,6 +203,7 @@ impl AnalyzeBuilder {
             #[cfg(feature = "checksum")]
             collect_duplicate_candidates: detect_duplicates_enabled,
             max_reported_errors: self.max_reported_errors,
+            walk_concurrency: self.walk_concurrency.unwrap_or_else(default_concurrency),
         };
 
         #[cfg(feature = "checksum")]

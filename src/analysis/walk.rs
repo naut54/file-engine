@@ -2,7 +2,7 @@ use std::collections::{BinaryHeap, HashMap};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime};
 
-use walkdir::WalkDir;
+use jwalk::{Parallelism, WalkDir};
 
 use crate::error::{Error, Result};
 
@@ -10,7 +10,7 @@ use super::error_strategy::AnalysisErrorStrategy;
 use super::filter::AnalysisFilter;
 use super::progress::{AnalysisProgress, AnalysisProgressReporter};
 use super::report::{AgeBuckets, Entry, ExtensionStats, MimeStats};
-use super::util::{classify_io_error, classify_walkdir_error};
+use super::util::{classify_io_error, classify_jwalk_error};
 
 pub(crate) struct WalkParams {
     pub(crate) root: PathBuf,
@@ -23,6 +23,9 @@ pub(crate) struct WalkParams {
     #[cfg(feature = "checksum")]
     pub(crate) collect_duplicate_candidates: bool,
     pub(crate) max_reported_errors: usize,
+    /// Directory-read/stat worker count for the underlying `jwalk`
+    /// traversal — see `AnalyzeBuilder::walk_concurrency`.
+    pub(crate) walk_concurrency: usize,
 }
 
 pub(crate) struct WalkOutcome {
@@ -264,23 +267,34 @@ fn walk_blocking(
         return Ok(aggregator.finish().into_walk_outcome(errors, errors_total));
     }
 
-    let mut walker = WalkDir::new(&params.root).follow_links(params.follow_symlinks);
+    let root = params.root.clone();
+    let exclude_root = root.clone();
+
+    let mut walker = WalkDir::new(&params.root)
+        .skip_hidden(false)
+        .follow_links(params.follow_symlinks)
+        .parallelism(Parallelism::RayonNewPool(params.walk_concurrency.max(1)))
+        .process_read_dir(move |_depth, _read_dir_path, _state, children| {
+            let Some(excludes) = &excludes else {
+                return;
+            };
+            children.retain(|child| {
+                let Ok(child) = child else {
+                    return true;
+                };
+                // The root itself (depth 0) is never excluded — only its
+                // descendants.
+                if child.depth == 0 {
+                    return true;
+                }
+                let path = child.path();
+                let relative = path.strip_prefix(&exclude_root).unwrap_or(&path);
+                !excludes.is_match(relative)
+            });
+        });
     if let Some(max_depth) = params.max_depth {
         walker = walker.max_depth(max_depth);
     }
-    let root = params.root.clone();
-
-    let walker = walker.into_iter().filter_entry(move |entry| {
-        // The root itself is never excluded — only its descendants.
-        if entry.path() == root {
-            return true;
-        }
-        let Some(excludes) = &excludes else {
-            return true;
-        };
-        let relative = entry.path().strip_prefix(&root).unwrap_or(entry.path());
-        !excludes.is_match(relative)
-    });
 
     for result in walker {
         if cancel.is_cancelled() {
@@ -290,7 +304,7 @@ fn walk_blocking(
         let walk_entry = match result {
             Ok(e) => e,
             Err(err) => {
-                let err = classify_walkdir_error(err);
+                let err = classify_jwalk_error(err);
                 let path = err_path(&err);
                 if params.error_strategy == AnalysisErrorStrategy::AbortOnError {
                     return Err(err);
@@ -304,10 +318,10 @@ fn walk_blocking(
         };
 
         let file_type = walk_entry.file_type();
-        let relative_path = walk_entry
-            .path()
-            .strip_prefix(&params.root)
-            .unwrap_or_else(|_| walk_entry.path())
+        let full_path = walk_entry.path();
+        let relative_path = full_path
+            .strip_prefix(&root)
+            .unwrap_or(&full_path)
             .to_path_buf();
 
         if file_type.is_dir() {
@@ -324,14 +338,13 @@ fn walk_blocking(
         let metadata = match walk_entry.metadata() {
             Ok(m) => m,
             Err(err) => {
-                let err = classify_walkdir_error(err);
-                let path = walk_entry.path().to_path_buf();
+                let err = classify_jwalk_error(err);
                 if params.error_strategy == AnalysisErrorStrategy::AbortOnError {
                     return Err(err);
                 }
                 errors_total += 1;
                 if errors.len() < params.max_reported_errors {
-                    errors.push((path, err));
+                    errors.push((full_path, err));
                 }
                 continue;
             }
@@ -344,7 +357,7 @@ fn walk_blocking(
         }
 
         let entry = Entry {
-            path: walk_entry.path().to_path_buf(),
+            path: full_path,
             relative_path,
             size,
             modified,
@@ -389,6 +402,7 @@ mod tests {
             #[cfg(feature = "checksum")]
             collect_duplicate_candidates: false,
             max_reported_errors: 1000,
+            walk_concurrency: 2,
         }
     }
 
