@@ -54,3 +54,15 @@ before considering any change done — see
 `-D warnings` (see `.cargo/config.toml`), and a change that compiles
 under one feature combination can still fail under another, so check
 more than the default build.
+
+## Git hooks
+
+```
+git config core.hooksPath .githooks
+```
+
+Enables `.githooks/commit-msg`, which strips AI co-author/session
+trailers (`Co-Authored-By: Claude ...`, `Claude-Session:`, and similar)
+from commit messages regardless of which tool authored them. This is a
+local `core.hooksPath` setting — it isn't picked up automatically from a
+fresh clone, so run the command above once per checkout.

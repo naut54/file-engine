@@ -1,0 +1,20 @@
+#!/bin/sh
+# Strips AI-attribution trailers (Claude/Anthropic co-author and session
+# links) that coding assistants sometimes append to commit messages
+# regardless of project convention. Runs on every `git commit`.
+#
+# Enable with: git config core.hooksPath .githooks
+
+msg_file="$1"
+
+sed -E -i '' \
+  -e '/^Co-Authored-By:.*(Claude|Anthropic)/d' \
+  -e '/^Claude-Session:/d' \
+  -e '/^.* Generated with \[Claude Code\]/d' \
+  -e '/^https:\/\/claude\.ai\/code\//d' \
+  "$msg_file"
+
+# Collapse any now-trailing blank lines left behind by the removals.
+while [ "$(tail -n 1 "$msg_file")" = "" ]; do
+  sed -i '' -e '$d' "$msg_file"
+done
