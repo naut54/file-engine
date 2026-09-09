@@ -4,7 +4,7 @@ All notable changes to this project are documented here.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.3.0]
+## [2.4.0]
 
 ### Added
 
@@ -32,6 +32,10 @@ This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   which `copy`/`move`/`sync`/`compress` continue to call with the
   original hardcoded behavior (unbounded depth, symlinks never
   followed).
+
+## [2.3.0]
+
+### Added
 
 - **`FileEngine::move_many(sources, dest)` / `MoveManyBuilder`** — moves
   several independent sources into one destination directory as a
