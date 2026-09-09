@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use walkdir::WalkDir;
 
-use crate::error::{Error, Result};
+use crate::error::{classify_io_error, Error, Result};
 
 use super::workload::{DirEntry, Entry, Workload};
 
@@ -36,7 +36,7 @@ fn scan_blocking(root: &Path, threshold: u64) -> Result<Workload> {
     // The root itself is resolved following symlinks (it's the explicit
     // starting point the caller gave, not something discovered mid-walk),
     // matching how tools like `cp`/`rsync` treat their top-level argument.
-    let metadata = fs::metadata(root).map_err(|e| classify_io_error(e, root.to_path_buf()))?;
+    let metadata = fs::metadata(root).map_err(|e| classify_io_error(e, root.to_path_buf(), 0))?;
 
     if metadata.is_file() {
         let relative_path = root
@@ -98,22 +98,10 @@ fn scan_blocking(root: &Path, threshold: u64) -> Result<Workload> {
     Ok(workload)
 }
 
-fn classify_io_error(err: io::Error, path: PathBuf) -> Error {
-    match err.kind() {
-        io::ErrorKind::NotFound => Error::SourceNotFound { path },
-        io::ErrorKind::PermissionDenied => Error::PermissionDenied { path },
-        io::ErrorKind::StorageFull => Error::NoSpace {
-            needed: 0,
-            available: 0,
-        },
-        _ => Error::Io { path, source: err },
-    }
-}
-
 fn classify_walkdir_error(err: walkdir::Error) -> Error {
     let path = err.path().map(|p| p.to_path_buf());
     match err.into_io_error() {
-        Some(io_err) => classify_io_error(io_err, path.unwrap_or_default()),
+        Some(io_err) => classify_io_error(io_err, path.unwrap_or_default(), 0),
         None => Error::Io {
             path: path.unwrap_or_default(),
             source: io::Error::other("directory walk error"),

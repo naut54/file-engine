@@ -59,6 +59,23 @@ exFAT-on-macOS write-integrity risk — rather than failing unpredictably
 partway through or silently losing data. See
 [`docs/guide/filesystem-safety.md`](docs/guide/filesystem-safety.md).
 
+`FileEngine::move_many(sources, dest_dir)` moves several independent
+sources into one destination directory as a single batched operation —
+one shared `ErrorStrategy`, concurrency pool, and progress stream across
+all of them, rather than one `.move_path()` call per source. Each source
+keeps its own basename under `dest_dir`.
+
+With the `checksum` feature, `.skip_if_identical(true)` on `.copy()`,
+`.move_path()`, and `.move_many()` compares content instead of failing
+outright when the destination already exists: an identical destination
+is left in place (for a move, the now-redundant source is still
+removed), while a genuinely different one still fails with
+`Error::DestExists` for the caller to decide what to do.
+
+```rust
+engine.move_path("src.txt", "dst.txt").skip_if_identical(true).start()?.await?;
+```
+
 ## Features
 
 Only pay for what you use — the public surface grows and shrinks via Cargo
@@ -66,9 +83,9 @@ feature flags.
 
 | Feature | Enables | Notes |
 | --- | --- | --- |
-| `operations` *(default)* | `copy`, `move_path` | Also pulls in filesystem-capability detection (used by `copy`/`move`/`sync`). |
+| `operations` *(default)* | `copy`, `move_path`, `move_many` | Also pulls in filesystem-capability detection (used by `copy`/`move`/`sync`). |
 | `sync` | `FileEngine::sync()` | Implies `operations`. |
-| `checksum` | `DiffStrategy::Checksum` for `sync`; `.detect_duplicates()` for `analyze` | Content-hash (blake3) comparison/grouping instead of size+mtime. |
+| `checksum` | `DiffStrategy::Checksum` for `sync`; `.detect_duplicates()` for `analyze`; `.skip_if_identical()` for `copy`/`move_path`/`move_many` | Content-hash (blake3) comparison/grouping instead of size+mtime. |
 | `watch` | `FileEngine::watch()` | Does **not** require `operations` — watching doesn't use the batching pipeline. |
 | `compress` | `FileEngine::compress()` | Zip or gzip, inferred from the destination extension or set explicitly via `CompressFormat`. No decompress support yet. |
 | `permissions` | `.preserve_permissions()` on copy/move/sync | Unix only. Mode bits, not ownership. |

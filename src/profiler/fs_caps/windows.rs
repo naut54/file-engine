@@ -4,9 +4,9 @@ use std::path::Path;
 
 use windows_sys::Win32::Storage::FileSystem::{GetVolumeInformationW, GetVolumePathNameW};
 
-use crate::error::Result;
+use crate::error::{classify_io_error, Result};
 
-use super::{case_sensitive_by_name, classify_by_name, classify_io_error, FilesystemCapabilities};
+use super::{case_sensitive_by_name, classify_by_name, FilesystemCapabilities};
 
 /// Implemented from documented Win32 behavior (`GetVolumePathNameW` +
 /// `GetVolumeInformationW`). The name lookup and the capabilities
@@ -30,6 +30,7 @@ pub(super) fn probe(path: &Path) -> Result<FilesystemCapabilities> {
         return Err(classify_io_error(
             std::io::Error::last_os_error(),
             path.to_path_buf(),
+            0,
         ));
     }
 
@@ -52,6 +53,7 @@ pub(super) fn probe(path: &Path) -> Result<FilesystemCapabilities> {
         return Err(classify_io_error(
             std::io::Error::last_os_error(),
             path.to_path_buf(),
+            0,
         ));
     }
 

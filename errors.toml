@@ -39,6 +39,13 @@ template = "filename is reserved or invalid on the destination filesystem: {path
 template = "destination filesystem ({filesystem}) has a known write-integrity issue on this platform"
 hint = "Pass `.allow_filesystem_integrity_risk(true)` to proceed anyway."
 
+[FE_DUPLICATE_SOURCE_NAME]
+template = "two sources would both move to the same destination name: {path} and {other}"
+hint = "Rename one of the sources, or move them separately with distinct destinations."
+
+[FE_INVALID_SOURCE_NAME]
+template = "source path has no file name to move under: {path}"
+
 [FE_INVALID_GLOB_PATTERN]
 template = "invalid glob pattern {pattern:?}: {source}"
 hint = "Check the pattern passed to `.exclude_globs(...)` is valid glob syntax."

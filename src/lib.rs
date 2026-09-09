@@ -1,5 +1,7 @@
 #[cfg(feature = "analyze")]
 mod analysis;
+#[cfg(feature = "checksum")]
+mod checksum;
 mod error;
 #[cfg(feature = "operations")]
 mod eta;
@@ -54,6 +56,8 @@ pub use operations::diff::DiffStrategy;
 pub use operations::CopyBuilder;
 #[cfg(feature = "operations")]
 pub use operations::MoveBuilder;
+#[cfg(feature = "operations")]
+pub use operations::MoveManyBuilder;
 #[cfg(feature = "watch")]
 pub use operations::WatchBuilder;
 #[cfg(feature = "compress")]
@@ -102,6 +106,19 @@ impl FileEngine {
         dest: impl Into<std::path::PathBuf>,
     ) -> MoveBuilder {
         MoveBuilder::new(source, dest)
+    }
+
+    /// Moves several independent sources into one destination directory
+    /// as a single batched operation. `dest` is always a directory the
+    /// sources land *inside* (each keeps its own basename), unlike
+    /// `.move_path()`'s `dest`, which can be a rename target.
+    #[cfg(feature = "operations")]
+    pub fn move_many(
+        &self,
+        sources: impl IntoIterator<Item = impl Into<std::path::PathBuf>>,
+        dest: impl Into<std::path::PathBuf>,
+    ) -> MoveManyBuilder {
+        MoveManyBuilder::new(sources, dest)
     }
 
     #[cfg(feature = "watch")]
@@ -259,6 +276,29 @@ mod tests {
         assert_eq!(fs::read(&dest_file).unwrap(), b"hello");
         // Stamped even on the rename fast path, which enumerates nothing.
         assert!(outcome.duration > std::time::Duration::ZERO);
+    }
+
+    #[tokio::test]
+    async fn move_many_end_to_end_through_the_public_api() {
+        let src_dir = tempdir().unwrap();
+        let dest_dir = tempdir().unwrap();
+        let a = src_dir.path().join("a.txt");
+        let b = src_dir.path().join("b.txt");
+        fs::write(&a, b"a").unwrap();
+        fs::write(&b, b"b").unwrap();
+
+        let engine = FileEngine::new();
+        let handle = engine
+            .move_many([a.clone(), b.clone()], dest_dir.path())
+            .start()
+            .unwrap();
+        let outcome = handle.await.unwrap();
+
+        assert!(outcome.sources_failed.is_empty());
+        assert!(!a.exists());
+        assert!(!b.exists());
+        assert_eq!(fs::read(dest_dir.path().join("a.txt")).unwrap(), b"a");
+        assert_eq!(fs::read(dest_dir.path().join("b.txt")).unwrap(), b"b");
     }
 
     #[tokio::test]

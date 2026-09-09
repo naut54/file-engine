@@ -77,6 +77,12 @@ pub enum Progress {
     EntryCompleted {
         entry: Entry,
     },
+    /// Emitted instead of `EntryCompleted` when the destination already
+    /// held byte-identical content, so the entry was left untouched
+    /// rather than copied (`.skip_if_identical()`, `checksum` feature).
+    EntrySkipped {
+        entry: Entry,
+    },
     EntryFailed {
         entry: Entry,
     },

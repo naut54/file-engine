@@ -1,6 +1,6 @@
 [package]
 name = "file-engine"
-version = "2.2.0"
+version = "2.3.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT"
@@ -9,6 +9,11 @@ repository = "https://github.com/naut54/file-engine"
 readme = "README.md"
 keywords = ["filesystem", "io", "async", "tokio", "copy"]
 categories = ["filesystem", "asynchronous"]
+# `fault-harness/` is a sibling dev-tool crate (see
+# dev-docs/design/fault-injection-harness.md) that depends on this crate
+# via a path dependency, not the other way around — excluded so it never
+# rides along in the published tarball.
+exclude = ["/fault-harness"]
 
 [features]
 default     = ["operations", "analyze"]

@@ -5,6 +5,8 @@ mod copy;
 #[cfg(feature = "sync")]
 pub(crate) mod diff;
 #[cfg(feature = "operations")]
+mod move_many;
+#[cfg(feature = "operations")]
 mod move_path;
 #[cfg(feature = "operations")]
 pub(crate) mod pipeline;
@@ -26,6 +28,8 @@ pub(crate) fn default_concurrency() -> usize {
 pub use compress::{CompressBuilder, CompressFormat};
 #[cfg(feature = "operations")]
 pub use copy::CopyBuilder;
+#[cfg(feature = "operations")]
+pub use move_many::MoveManyBuilder;
 #[cfg(feature = "operations")]
 pub use move_path::MoveBuilder;
 #[cfg(feature = "sync")]

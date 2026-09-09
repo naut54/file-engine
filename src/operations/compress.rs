@@ -9,7 +9,7 @@ use tokio::task::JoinSet;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{Error, Result};
+use crate::error::{classify_io_error, Error, Result};
 use crate::planner::{plan, BatchConfig, ErrorStrategy, OperationOutcome, StopReason};
 use crate::profiler::{scan, Entry, DEFAULT_SMALL_FILE_THRESHOLD};
 use crate::progress::{Progress, ProgressReporter};
@@ -139,7 +139,7 @@ pub(crate) async fn compress(
     if matches!(format, CompressFormat::Gzip) {
         let metadata = tokio::fs::metadata(source)
             .await
-            .map_err(|e| classify_error(e, source))?;
+            .map_err(|e| classify_io_error(e, source.to_path_buf(), 0))?;
         if metadata.is_dir() {
             return Err(Error::GzipRequiresFile {
                 path: source.to_path_buf(),
@@ -182,7 +182,8 @@ fn compress_gzip_blocking(
     dest: &Path,
     reporter: ProgressReporter,
 ) -> Result<OperationOutcome> {
-    let metadata = std::fs::metadata(source).map_err(|e| classify_error(e, source))?;
+    let metadata =
+        std::fs::metadata(source).map_err(|e| classify_io_error(e, source.to_path_buf(), 0))?;
     let entry = Entry {
         path: source.to_path_buf(),
         relative_path: source.file_name().map(PathBuf::from).unwrap_or_default(),
@@ -210,12 +211,17 @@ fn compress_gzip_blocking(
     });
 
     let result: Result<()> = (|| {
-        let mut input = std::fs::File::open(source).map_err(|e| classify_error(e, source))?;
-        let output = std::fs::File::create(dest).map_err(|e| classify_error(e, dest))?;
+        let mut input = std::fs::File::open(source)
+            .map_err(|e| classify_io_error(e, source.to_path_buf(), 0))?;
+        let output =
+            std::fs::File::create(dest).map_err(|e| classify_io_error(e, dest.to_path_buf(), 0))?;
         let mut encoder = flate2::write::GzEncoder::new(output, flate2::Compression::default());
 
-        std::io::copy(&mut input, &mut encoder).map_err(|e| classify_error(e, source))?;
-        encoder.finish().map_err(|e| classify_error(e, dest))?;
+        std::io::copy(&mut input, &mut encoder)
+            .map_err(|e| classify_io_error(e, source.to_path_buf(), 0))?;
+        encoder
+            .finish()
+            .map_err(|e| classify_io_error(e, dest.to_path_buf(), 0))?;
         Ok(())
     })();
 
@@ -375,7 +381,7 @@ async fn compress_zip(
                         reporter.send(Progress::EntryFailed {
                             entry: entry.clone(),
                         });
-                        let error = classify_error(e, &entry.path);
+                        let error = classify_io_error(e, entry.path.clone(), 0);
                         WriterMsg::Failed { entry, error }
                     }
                 };
@@ -426,7 +432,7 @@ fn write_archive(
     stop: Arc<AtomicBool>,
     reporter: ProgressReporter,
 ) -> Result<OperationOutcome> {
-    let file = std::fs::File::create(&dest).map_err(|e| classify_error(e, &dest))?;
+    let file = std::fs::File::create(&dest).map_err(|e| classify_io_error(e, dest.clone(), 0))?;
     let mut zip = zip::ZipWriter::new(file);
     let options = zip::write::SimpleFileOptions::default();
 
@@ -518,25 +524,6 @@ fn record_failure(
             outcome.stopped_early = Some(reason);
         }
         stop.store(true, Ordering::SeqCst);
-    }
-}
-
-fn classify_error(err: std::io::Error, path: &Path) -> Error {
-    match err.kind() {
-        std::io::ErrorKind::NotFound => Error::SourceNotFound {
-            path: path.to_path_buf(),
-        },
-        std::io::ErrorKind::PermissionDenied => Error::PermissionDenied {
-            path: path.to_path_buf(),
-        },
-        std::io::ErrorKind::StorageFull => Error::NoSpace {
-            needed: 0,
-            available: 0,
-        },
-        _ => Error::Io {
-            path: path.to_path_buf(),
-            source: err,
-        },
     }
 }
 

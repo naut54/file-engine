@@ -62,6 +62,24 @@ pub enum Error {
         "destination filesystem ({filesystem}) has a known write-integrity issue on this platform"
     )]
     FilesystemIntegrityRisk { filesystem: String },
+
+    /// Whole-batch pre-flight validation for `MoveManyBuilder`, same
+    /// spirit as `FilesystemIntegrityRisk` above: two sources sharing a
+    /// basename is ambiguous ("moved into `dest`" would mean two
+    /// different things), so it's caught before any source is touched
+    /// rather than surfacing as a confusing overwrite of one by the
+    /// other partway through. `is_fatal` accordingly.
+    #[cfg(feature = "operations")]
+    #[error("two sources would both move to the same destination name: {path} and {other}")]
+    DuplicateSourceName { path: PathBuf, other: PathBuf },
+
+    /// `MoveManyBuilder` pre-flight validation: a source with no final
+    /// path component (`/`, `.`, `..`, ...) has nothing to name its
+    /// destination entry after. `is_fatal`, same reasoning as
+    /// `DuplicateSourceName`.
+    #[cfg(feature = "operations")]
+    #[error("source path has no file name to move under: {path}")]
+    InvalidSourceName { path: PathBuf },
 }
 
 impl Error {
@@ -79,8 +97,47 @@ impl Error {
     pub(crate) fn is_fatal(&self) -> bool {
         matches!(
             self,
-            Error::Cancelled | Error::NoSpace { .. } | Error::FilesystemIntegrityRisk { .. }
+            Error::Cancelled
+                | Error::NoSpace { .. }
+                | Error::FilesystemIntegrityRisk { .. }
+                | Error::DuplicateSourceName { .. }
+                | Error::InvalidSourceName { .. }
         )
+    }
+}
+
+/// Maps a raw `io::Error` onto the crate's `Error` variants — shared by
+/// every module that turns a filesystem call's `io::Error` into one.
+/// Previously duplicated ten times, nearly identically, across
+/// `operations`/`profiler`/`analysis` (see
+/// `dev-docs/design/error-classification-audit.md`'s "Research"
+/// section); consolidated here specifically because `error.rs` is the
+/// one module every feature combination compiles unconditionally —
+/// `profiler::scan`'s copy of this was gated behind `operations`, which
+/// is exactly why `analysis::util` couldn't reuse it and grew its own.
+///
+/// `needed` is only meaningful for the `StorageFull` arm (`NoSpace`'s
+/// `needed` field); callers with no real figure to hand pass `0` rather
+/// than fabricating one, matching every pre-consolidation call site
+/// except `planner::action`'s (which has the entry's real size).
+/// `available` isn't queried at this level either (would need an extra
+/// statvfs-style syscall) so it's always reported as `0`.
+///
+/// Gated on the union of every feature that actually calls this
+/// (`operations`, `watch`, `analyze` independently — none of the three
+/// implies another) rather than left unconditional, so a build enabling
+/// none of them (e.g. `--no-default-features --features diagnostics`,
+/// exercised by CI's feature-powerset check) doesn't fail on dead code.
+#[cfg(any(feature = "operations", feature = "watch", feature = "analyze"))]
+pub(crate) fn classify_io_error(err: io::Error, path: PathBuf, needed: u64) -> Error {
+    match err.kind() {
+        io::ErrorKind::NotFound => Error::SourceNotFound { path },
+        io::ErrorKind::PermissionDenied => Error::PermissionDenied { path },
+        io::ErrorKind::StorageFull => Error::NoSpace {
+            needed,
+            available: 0,
+        },
+        _ => Error::Io { path, source: err },
     }
 }
 

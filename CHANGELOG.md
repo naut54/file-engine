@@ -4,6 +4,69 @@ All notable changes to this project are documented here.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0]
+
+### Added
+
+- **`FileEngine::move_many(sources, dest)` / `MoveManyBuilder`** — moves
+  several independent sources into one destination directory as a
+  single batched operation, rather than requiring one `.move_path()`
+  call per source (and losing a shared `ErrorStrategy`/concurrency
+  pool/progress stream across them). `dest` is always a directory
+  sources land *inside*; each source keeps its own basename. Two
+  sources resolving to the same basename, or a source with no file name
+  to move under, is rejected up front as `Error::DuplicateSourceName`/
+  `Error::InvalidSourceName` before any source is touched.
+
+  Each source first attempts its own atomic rename (same fast path
+  `.move_path()` uses); sources that need the cross-filesystem fallback
+  are scanned, re-rooted under their own basename, and merged into a
+  single `run_workload_pipeline` call, so `AbortOnError`/`Undo` stop the
+  whole batch together rather than source-by-source. New
+  `OperationOutcome::sources_failed` reports whole-source failures (a
+  rename error other than crossing filesystems, a source that vanished)
+  that happen before any per-file `Entry` exists — always empty for
+  `.copy()`/`.move_path()`.
+
+- **`.skip_if_identical(bool)`** on `CopyBuilder`, `MoveBuilder`, and
+  `MoveManyBuilder` (feature `checksum`) — when the destination already
+  exists and `.overwrite(false)` (the default), compares content (size
+  first, then a blake3 hash of both files) instead of immediately
+  failing with `Error::DestExists`. An identical destination is left
+  untouched rather than re-copied; a destination that exists but differs
+  still fails exactly as without this — a library has no way to
+  interactively ask whether to replace it, so that decision is left to
+  whatever's built on top of this crate, which can catch `DestExists`
+  and retry with `.overwrite(true)`. New `OperationOutcome::skipped` and
+  `Progress::EntrySkipped` report entries left alone this way, distinct
+  from `succeeded` since no bytes were transferred.
+
+  For `.move_path()`/`.move_many()`, this applies to the atomic-rename
+  fast path too, not just the cross-filesystem fallback: `source` is
+  still removed on an identical-destination skip (that's still what
+  "moved" means), it just skips redundantly rewriting a destination that
+  already matches.
+
+### Fixed
+
+- **`.move_path()`'s atomic-rename fast path now creates a missing
+  destination parent directory** instead of failing with a misleading
+  `Error::SourceNotFound` that actually blamed the wrong path —
+  `rename(2)` returns the same `NotFound` whether it's `source` or a
+  component of `dest`'s parent chain that's missing, and the fast path
+  used to attribute every such failure to `source` unconditionally.
+  `.copy()` already handled this correctly via `create_dir_all`; only
+  the move fast path had the gap.
+
+- **`.move_path()`'s atomic-rename fast path now respects
+  `.overwrite(false)`.** `rename(2)` (and its Windows equivalent)
+  natively replaces an existing destination file with no error, so
+  `overwrite(false)` was previously enforced only on the cross-device
+  fallback path, not on same-filesystem moves — the overwhelmingly
+  common case. A same-filesystem move into an existing file now fails
+  with `Error::DestExists`, matching `.copy()`'s and the fallback path's
+  existing behavior, unless `.skip_if_identical(true)` resolves it.
+
 ## [2.2.0]
 
 ### Changed

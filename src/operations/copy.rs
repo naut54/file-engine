@@ -16,6 +16,7 @@ pub struct CopyBuilder {
     source: PathBuf,
     dest: PathBuf,
     overwrite: bool,
+    skip_if_identical: bool,
     /// Unconditional field even though only `.preserve_permissions()`
     /// (Unix-only) can ever set it.
     preserve_permissions: bool,
@@ -31,6 +32,7 @@ impl CopyBuilder {
             source: source.into(),
             dest: dest.into(),
             overwrite: false,
+            skip_if_identical: false,
             preserve_permissions: false,
             allow_filesystem_integrity_risk: false,
             small_file_threshold: None,
@@ -41,6 +43,23 @@ impl CopyBuilder {
 
     pub fn overwrite(mut self, overwrite: bool) -> Self {
         self.overwrite = overwrite;
+        self
+    }
+
+    /// Only consulted when `.overwrite(false)` (the default) *and* the
+    /// destination already exists: instead of failing with
+    /// `Error::DestExists`, compares content (size first, then a blake3
+    /// hash of both files — see `checksum::files_identical`) and leaves
+    /// an already-identical destination alone rather than re-copying it
+    /// or failing on it. A destination that exists but differs still
+    /// fails with `Error::DestExists` exactly as without this — a
+    /// library has no way to interactively ask whether to replace it;
+    /// that decision belongs to whatever's built on top of this crate,
+    /// which can catch `DestExists` and retry with `.overwrite(true)` if
+    /// the user says yes. Requires the `checksum` feature.
+    #[cfg(feature = "checksum")]
+    pub fn skip_if_identical(mut self, skip: bool) -> Self {
+        self.skip_if_identical = skip;
         self
     }
 
@@ -107,6 +126,7 @@ impl CopyBuilder {
                 &self.source,
                 &self.dest,
                 self.overwrite,
+                self.skip_if_identical,
                 self.preserve_permissions,
                 self.allow_filesystem_integrity_risk,
                 threshold,

@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{Error, Result};
+use crate::error::{classify_io_error, Result};
 use crate::planner::{BatchConfig, ErrorStrategy, OperationOutcome, StopReason};
 use crate::profiler::{probe_fs_caps, Entry, Workload, DEFAULT_SMALL_FILE_THRESHOLD};
 use crate::progress::{Progress, ProgressReporter};
@@ -177,6 +177,13 @@ async fn sync(
         dest,
         &dest_caps,
         overwrite,
+        // `sync` has no `.skip_if_identical()` of its own: `diff.rs`
+        // already decides what needs copying by size/mtime before this
+        // ever runs, which is the same "don't redo work that's already
+        // correct" goal a checksum comparison would serve here, just
+        // cheaper and already wired into the phase that builds
+        // `copy_workload` in the first place.
+        false,
         preserve_permissions,
         allow_filesystem_integrity_risk,
         small_file_threshold,
@@ -272,26 +279,7 @@ async fn remove_path(path: &Path) -> Result<()> {
     match tokio::fs::remove_file(path).await {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(classify_error(e, path)),
-    }
-}
-
-fn classify_error(err: io::Error, path: &Path) -> Error {
-    match err.kind() {
-        io::ErrorKind::NotFound => Error::SourceNotFound {
-            path: path.to_path_buf(),
-        },
-        io::ErrorKind::PermissionDenied => Error::PermissionDenied {
-            path: path.to_path_buf(),
-        },
-        io::ErrorKind::StorageFull => Error::NoSpace {
-            needed: 0,
-            available: 0,
-        },
-        _ => Error::Io {
-            path: path.to_path_buf(),
-            source: err,
-        },
+        Err(e) => Err(classify_io_error(e, path.to_path_buf(), 0)),
     }
 }
 

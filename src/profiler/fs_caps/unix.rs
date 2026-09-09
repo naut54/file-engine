@@ -2,9 +2,9 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
-use crate::error::Result;
+use crate::error::{classify_io_error, Result};
 
-use super::{classify_by_name, classify_io_error, FilesystemCapabilities};
+use super::{classify_by_name, FilesystemCapabilities};
 
 pub(super) fn probe(path: &Path) -> Result<FilesystemCapabilities> {
     let c_path = CString::new(path.as_os_str().as_bytes()).map_err(|_| {
@@ -43,6 +43,7 @@ fn fstype_name(c_path: &std::ffi::CStr, path: &Path) -> Result<String> {
             return Err(classify_io_error(
                 std::io::Error::last_os_error(),
                 path.to_path_buf(),
+                0,
             ));
         }
         Ok(CStr::from_ptr(buf.f_fstypename.as_ptr())
@@ -66,6 +67,7 @@ fn fstype_name(c_path: &std::ffi::CStr, path: &Path) -> Result<String> {
             return Err(classify_io_error(
                 std::io::Error::last_os_error(),
                 path.to_path_buf(),
+                0,
             ));
         }
         Ok(magic_to_name(buf.f_type as i64).to_string())
