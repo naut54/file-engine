@@ -5,9 +5,15 @@ mod copy;
 #[cfg(feature = "sync")]
 pub(crate) mod diff;
 #[cfg(feature = "operations")]
+mod move_many;
+#[cfg(feature = "operations")]
 mod move_path;
 #[cfg(feature = "operations")]
 pub(crate) mod pipeline;
+#[cfg(feature = "remove")]
+mod remove;
+#[cfg(feature = "remove")]
+mod remove_filter;
 #[cfg(feature = "sync")]
 mod sync;
 #[cfg(feature = "watch")]
@@ -27,7 +33,11 @@ pub use compress::{CompressBuilder, CompressFormat};
 #[cfg(feature = "operations")]
 pub use copy::CopyBuilder;
 #[cfg(feature = "operations")]
+pub use move_many::MoveManyBuilder;
+#[cfg(feature = "operations")]
 pub use move_path::MoveBuilder;
+#[cfg(feature = "remove")]
+pub use remove::{RemoveBuilder, RemoveOutcome};
 #[cfg(feature = "sync")]
 pub use sync::{SyncBuilder, SyncOutcome};
 #[cfg(feature = "watch")]

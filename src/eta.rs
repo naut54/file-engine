@@ -296,6 +296,24 @@ impl EtaEstimator {
                 }
             }
 
+            // No bytes were transferred (the destination already matched),
+            // so unlike `EntryCompleted` this must not feed the byte-rate
+            // estimator — doing so would make a near-instant stat+hash
+            // look like it moved `entry.size` bytes, inflating future
+            // throughput estimates. Still retires the entry from
+            // `*_remaining`/in-flight, the same as a completion, so ETA
+            // doesn't keep waiting on work that will never happen.
+            Progress::EntrySkipped { entry } => {
+                if self.regime_for(entry.size) == Regime::LargeFile {
+                    self.large_bytes_remaining =
+                        self.large_bytes_remaining.saturating_sub(entry.size);
+                    self.large_in_flight = self.large_in_flight.saturating_sub(1);
+                } else {
+                    self.small_files_remaining = self.small_files_remaining.saturating_sub(1);
+                    self.small_in_flight = self.small_in_flight.saturating_sub(1);
+                }
+            }
+
             Progress::EntryCompleted { entry } | Progress::EntryFailed { entry } => {
                 // A failure still consumed wall time and still retired an
                 // entry, so it counts toward the rate exactly as a success

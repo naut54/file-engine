@@ -20,6 +20,17 @@ pub enum Error {
     FileTooLargeForDest { path: PathBuf, size: u64, max: u64 },
     ReservedName { path: PathBuf },
     FilesystemIntegrityRisk { filesystem: String },
+
+    // `operations` feature only — `move_many` pre-flight validation
+    DuplicateSourceName { path: PathBuf, other: PathBuf },
+    InvalidSourceName { path: PathBuf },
+
+    // `analyze` or `remove` feature (either enables it independently)
+    InvalidGlobPattern { pattern: String, source: globset::Error },
+
+    // `remove` feature only
+    RemoveCriteriaRequired,
+    TrashFailed { path: PathBuf, source: trash::Error },
 }
 ```
 
@@ -53,11 +64,25 @@ pub enum ErrorStrategy {
 ```
 
 Some errors bypass `ErrorStrategy` entirely and always stop the whole
-operation — `Error::Cancelled`, `Error::NoSpace`, and
-`Error::FilesystemIntegrityRisk`. These describe conditions where
-continuing can't produce a trustworthy result, or (for
-`FilesystemIntegrityRisk`) aren't a property of any specific entry to
-begin with — every write to that destination carries the risk.
+operation — `Error::Cancelled`, `Error::NoSpace`,
+`Error::FilesystemIntegrityRisk`, `Error::DuplicateSourceName`, and
+`Error::InvalidSourceName`. These describe conditions where continuing
+can't produce a trustworthy result, or (for `FilesystemIntegrityRisk`,
+and `move_many`'s two duplicate/invalid-name checks) aren't a property
+of any specific entry to begin with — they're caught before any source
+is touched, as a top-level `Err` rather than a per-entry failure inside
+`OperationOutcome.failed`.
+
+`Error::RemoveCriteriaRequired` is the same shape for `remove()`: an
+unconfigured filter would otherwise match everything under the root, so
+it's returned as a top-level `Err` before any scanning happens, unless
+`.allow_unfiltered_delete(true)` opts in.
+`Error::TrashFailed`, by contrast, *is* a per-entry failure governed by
+`ErrorStrategy` like any other — it just can't be rolled back by `Undo`
+the way a copy/move can: a hard-deleted file is gone, and even a
+trashed one has no reliable cross-platform restore API. Prefer
+previewing with `remove()`'s default `.dry_run(true)` over relying on
+`Undo` to walk back a mistake.
 
 ## Checking what happened
 

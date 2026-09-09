@@ -39,6 +39,21 @@ template = "filename is reserved or invalid on the destination filesystem: {path
 template = "destination filesystem ({filesystem}) has a known write-integrity issue on this platform"
 hint = "Pass `.allow_filesystem_integrity_risk(true)` to proceed anyway."
 
+[FE_DUPLICATE_SOURCE_NAME]
+template = "two sources would both move to the same destination name: {path} and {other}"
+hint = "Rename one of the sources, or move them separately with distinct destinations."
+
+[FE_INVALID_SOURCE_NAME]
+template = "source path has no file name to move under: {path}"
+
 [FE_INVALID_GLOB_PATTERN]
 template = "invalid glob pattern {pattern:?}: {source}"
 hint = "Check the pattern passed to `.exclude_globs(...)` is valid glob syntax."
+
+[FE_REMOVE_CRITERIA_REQUIRED]
+template = "remove() called with no filter criteria set, which would match every entry under the root"
+hint = "Add a filter (`.extensions(...)`, `.min_size(...)`, ...), or pass `.allow_unfiltered_delete(true)` to delete everything under the root intentionally."
+
+[FE_TRASH_FAILED]
+template = "could not move to trash: {path}: {source}"
+hint = "Pass `.hard_delete(true)` to unlink permanently instead of using the platform trash, or check that a trash/recycle-bin service is available on this system."

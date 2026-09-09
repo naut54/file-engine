@@ -9,7 +9,7 @@ use tokio_util::sync::CancellationToken;
 use crate::profiler::Entry;
 use crate::progress::{Progress, ProgressReporter};
 
-use super::action::EntryAction;
+use super::action::{EntryAction, EntryOutcome};
 use super::config::ErrorStrategy;
 use super::outcome::{OperationOutcome, StopReason};
 use super::plan::ExecutionPlan;
@@ -217,11 +217,17 @@ pub(crate) async fn dispatch<A: EntryAction + 'static>(
                 }
 
                 match result {
-                    Ok(()) => {
+                    Ok(EntryOutcome::Written) => {
                         reporter.send(Progress::EntryCompleted {
                             entry: entry.clone(),
                         });
                         outcome.lock().unwrap().succeeded.push(entry);
+                    }
+                    Ok(EntryOutcome::Skipped) => {
+                        reporter.send(Progress::EntrySkipped {
+                            entry: entry.clone(),
+                        });
+                        outcome.lock().unwrap().skipped.push(entry);
                     }
                     Err(err) => {
                         reporter.send(Progress::EntryFailed {
@@ -343,7 +349,7 @@ mod tests {
             &'a self,
             entry: &'a Entry,
             _dest_root: &'a Path,
-        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = Result<EntryOutcome>> + Send + 'a>> {
             Box::pin(async move {
                 let current = self.active.fetch_add(1, Ordering::SeqCst) + 1;
                 self.max_active.fetch_max(current, Ordering::SeqCst);
@@ -370,7 +376,7 @@ mod tests {
                     Some(false) => Err(Error::SourceNotFound {
                         path: entry.path.clone(),
                     }),
-                    None => Ok(()),
+                    None => Ok(EntryOutcome::Written),
                 }
             })
         }
@@ -417,7 +423,7 @@ mod tests {
             &'a self,
             entry: &'a Entry,
             dest_root: &'a Path,
-        ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+        ) -> Pin<Box<dyn Future<Output = Result<EntryOutcome>> + Send + 'a>> {
             Box::pin(async move {
                 let dest = dest_root.join(&entry.relative_path);
                 for step in 1..=4u64 {
@@ -426,7 +432,7 @@ mod tests {
                         .unwrap();
                     tokio::time::sleep(Duration::from_millis(150)).await;
                 }
-                Ok(())
+                Ok(EntryOutcome::Written)
             })
         }
 

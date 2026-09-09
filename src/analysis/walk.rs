@@ -4,13 +4,13 @@ use std::time::{Duration, SystemTime};
 
 use jwalk::{Parallelism, WalkDir};
 
-use crate::error::{Error, Result};
+use crate::error::{classify_io_error, Error, Result};
 
 use super::error_strategy::AnalysisErrorStrategy;
 use super::filter::AnalysisFilter;
 use super::progress::{AnalysisProgress, AnalysisProgressReporter};
 use super::report::{AgeBuckets, Entry, ExtensionStats, MimeStats};
-use super::util::{classify_io_error, classify_jwalk_error};
+use super::util::classify_jwalk_error;
 
 pub(crate) struct WalkParams {
     pub(crate) root: PathBuf,
@@ -241,8 +241,8 @@ fn walk_blocking(
     let mut errors: Vec<(PathBuf, Error)> = Vec::new();
     let mut errors_total = 0usize;
 
-    let root_metadata =
-        std::fs::metadata(&params.root).map_err(|e| classify_io_error(e, params.root.clone()))?;
+    let root_metadata = std::fs::metadata(&params.root)
+        .map_err(|e| classify_io_error(e, params.root.clone(), 0))?;
 
     if root_metadata.is_file() {
         let relative_path = params

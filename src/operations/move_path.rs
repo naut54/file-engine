@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{Error, Result};
+use crate::error::{classify_io_error, Error, Result};
 use crate::planner::{
     BatchConfig, CopyAction, EntryAction, ErrorStrategy, OperationOutcome, StopReason,
 };
@@ -19,6 +19,7 @@ pub struct MoveBuilder {
     source: PathBuf,
     dest: PathBuf,
     overwrite: bool,
+    skip_if_identical: bool,
     preserve_permissions: bool,
     allow_filesystem_integrity_risk: bool,
     small_file_threshold: Option<u64>,
@@ -32,6 +33,7 @@ impl MoveBuilder {
             source: source.into(),
             dest: dest.into(),
             overwrite: false,
+            skip_if_identical: false,
             preserve_permissions: false,
             allow_filesystem_integrity_risk: false,
             small_file_threshold: None,
@@ -42,6 +44,22 @@ impl MoveBuilder {
 
     pub fn overwrite(mut self, overwrite: bool) -> Self {
         self.overwrite = overwrite;
+        self
+    }
+
+    /// Only consulted when `.overwrite(false)` (the default) *and* the
+    /// destination already exists: instead of failing with
+    /// `Error::DestExists`, compares content and leaves an already-
+    /// identical destination alone — the source is still removed, since
+    /// that's still what "moved" means, it just skips redundantly
+    /// rewriting a destination that already matches. A differing
+    /// destination still fails exactly as without this. See
+    /// `CopyBuilder::skip_if_identical` for the full rationale; applies
+    /// equally to this builder's atomic-rename fast path and its
+    /// cross-device fallback.
+    #[cfg(feature = "checksum")]
+    pub fn skip_if_identical(mut self, skip: bool) -> Self {
+        self.skip_if_identical = skip;
         self
     }
 
@@ -95,6 +113,7 @@ impl MoveBuilder {
                 &self.source,
                 &self.dest,
                 self.overwrite,
+                self.skip_if_identical,
                 self.preserve_permissions,
                 self.allow_filesystem_integrity_risk,
                 threshold,
@@ -134,26 +153,31 @@ impl Renamer for TokioRenamer {
     }
 }
 
-/// 1. Attempt a single atomic rename, deferring entirely to the OS's
-///    native rename semantics — no synthesized top-level overwrite check
-///    here, since for a directory move `dest` legitimately pre-exists as
-///    the directory being moved *into* (matching `CopyAction`'s
-///    `dest_root.join(relative_path)` placement, which mirrors contents
-///    into an existing directory rather than nesting a new one under
-///    it); a pre-check for "dest exists" would reject that normal case.
-///    Per-file overwrite conflicts are still caught correctly, just
-///    per-entry, by `CopyAction` in the fallback path below.
-/// 2. On cross-device failure, fall back to
+/// 1. If `dest` already exists and `source` is a single file, resolve
+///    the conflict up front (see `resolve_existing_dest_conflict`) —
+///    `rename(2)` would otherwise silently replace it regardless of
+///    `overwrite`. Directory sources are left alone here: `dest`
+///    legitimately pre-exists as the directory being moved *into*
+///    (matching `CopyAction`'s `dest_root.join(relative_path)`
+///    placement, which mirrors contents into an existing directory
+///    rather than nesting a new one under it), so a blanket
+///    "dest exists" pre-check would reject that normal case. Per-file
+///    overwrite conflicts inside a moved directory are still caught
+///    correctly, just per-entry, by `CopyAction` in the fallback path
+///    below.
+/// 2. Attempt a single atomic rename.
+/// 3. On cross-device failure, fall back to
 ///    `pipeline::run_copy_pipeline` (unmodified — no dedicated
 ///    `EntryAction` for move).
-/// 3. Any other rename error surfaces directly.
-/// 4. Once the copy phase resolves, run the deferred deletion sweep over
+/// 4. Any other rename error surfaces directly.
+/// 5. Once the copy phase resolves, run the deferred deletion sweep over
 ///    `succeeded`, governed by the same `ErrorStrategy`.
 #[allow(clippy::too_many_arguments)]
 async fn move_path<R: Renamer>(
     source: &Path,
     dest: &Path,
     overwrite: bool,
+    skip_if_identical: bool,
     preserve_permissions: bool,
     allow_filesystem_integrity_risk: bool,
     small_file_threshold: u64,
@@ -163,18 +187,37 @@ async fn move_path<R: Renamer>(
     reporter: ProgressReporter,
     renamer: &R,
 ) -> Result<OperationOutcome> {
+    // `rename(2)` fails with `NotFound` if any component of `dest`'s
+    // parent chain is missing — not just if `source` is missing — so
+    // without this, moving into a not-yet-created destination directory
+    // surfaces as a misleading `SourceNotFound` (see the `err` arm
+    // below, which blames `source` for every non-cross-device failure)
+    // and never reaches the copy-pipeline fallback, which *would* have
+    // created it. `create_dir_all` is a no-op when `parent` already
+    // exists, so this is safe to run unconditionally on every move.
+    if let Some(parent) = dest.parent() {
+        if let Err(err) = tokio::fs::create_dir_all(parent).await {
+            return Err(classify_io_error(err, dest.to_path_buf(), 0));
+        }
+    }
+
+    if !overwrite && resolve_existing_dest_conflict(source, dest, skip_if_identical).await? {
+        return Ok(OperationOutcome::default());
+    }
+
     match renamer.rename(source, dest).await {
         // Trivially "everything succeeded" without ever enumerating
         // individual entries, so no progress events are emitted either.
         Ok(()) => return Ok(OperationOutcome::default()),
         Err(err) if is_cross_device(&err) => {}
-        Err(err) => return Err(classify_error(err, source)),
+        Err(err) => return Err(classify_io_error(err, source.to_path_buf(), 0)),
     }
 
     let mut outcome = run_copy_pipeline(
         source,
         dest,
         overwrite,
+        skip_if_identical,
         preserve_permissions,
         allow_filesystem_integrity_risk,
         small_file_threshold,
@@ -190,10 +233,103 @@ async fn move_path<R: Renamer>(
     Ok(outcome)
 }
 
+/// Guards the atomic-rename fast path against `rename(2)`'s native
+/// overwrite semantics: on Unix (and Windows' `MoveFileEx` equivalent),
+/// `rename(source, dest)` happily replaces an existing destination
+/// *file* with no error, so without this check `overwrite=false` is
+/// silently unenforced here even though the cross-device fallback below
+/// (via `CopyAction`) enforces it correctly. Only applies when `source`
+/// is a single file — a directory `dest` pre-existing is the normal
+/// "move into" case (see the `move_path` doc comment), and there's no
+/// single-file checksum to compare a directory against anyway.
+///
+/// `Ok(false)` means "no conflict (or not applicable) — proceed with the
+/// rename exactly as before", the zero-added-cost path for the common
+/// case of moving to a location that doesn't exist yet. `Ok(true)` means
+/// the move is already fully resolved (dest was identical, so `source`
+/// was removed and nothing else needs to happen) without ever calling
+/// `rename`. `Err` is either the conflict itself (`Error::DestExists`)
+/// or a genuine I/O failure reaching either file's metadata.
+///
+/// `pub(crate)` (not private): `move_many.rs` runs this same per-source
+/// check ahead of its own rename attempt, for the same reason.
+pub(crate) async fn resolve_existing_dest_conflict(
+    source: &Path,
+    dest: &Path,
+    skip_if_identical: bool,
+) -> Result<bool> {
+    let dest_meta = match tokio::fs::metadata(dest).await {
+        Ok(meta) => meta,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(false),
+        Err(e) => return Err(classify_io_error(e, dest.to_path_buf(), 0)),
+    };
+
+    let source_meta = tokio::fs::metadata(source)
+        .await
+        .map_err(|e| classify_io_error(e, source.to_path_buf(), 0))?;
+    if !source_meta.is_file() {
+        return Ok(false);
+    }
+
+    if identical_to_existing(
+        source,
+        dest,
+        source_meta.len(),
+        dest_meta.len(),
+        skip_if_identical,
+    )
+    .await?
+    {
+        tokio::fs::remove_file(source)
+            .await
+            .map_err(|e| classify_io_error(e, source.to_path_buf(), 0))?;
+        return Ok(true);
+    }
+
+    Err(Error::DestExists {
+        path: dest.to_path_buf(),
+    })
+}
+
+/// No-op fallback when `checksum` is disabled, so `enabled` (always
+/// `false` in that build, since the one builder method that can set it
+/// is itself `checksum`-gated) never needs its own `#[cfg]` at the call
+/// site — same pattern as `planner::action::CopyAction::identical_to_existing`.
+#[cfg(feature = "checksum")]
+async fn identical_to_existing(
+    source: &Path,
+    dest: &Path,
+    source_len: u64,
+    dest_len: u64,
+    enabled: bool,
+) -> Result<bool> {
+    if !enabled {
+        return Ok(false);
+    }
+    crate::checksum::files_identical(source, dest, source_len, dest_len).await
+}
+
+#[cfg(not(feature = "checksum"))]
+async fn identical_to_existing(
+    _source: &Path,
+    _dest: &Path,
+    _source_len: u64,
+    _dest_len: u64,
+    _enabled: bool,
+) -> Result<bool> {
+    Ok(false)
+}
+
 /// Deletes each `succeeded` entry's original source. Sequential — no
 /// batching/concurrency of its own, since deletions are cheap metadata
 /// operations, not data transfer.
-async fn sweep(
+///
+/// `pub(crate)` (not private): `move_many.rs` reuses this verbatim over
+/// its own merged multi-source outcome — the same "delete every
+/// successfully-copied source, roll back on failure under `Undo`" logic
+/// applies regardless of whether the entries came from one source tree
+/// or several concatenated ones.
+pub(crate) async fn sweep(
     outcome: &mut OperationOutcome,
     dest_root: &Path,
     error_strategy: ErrorStrategy,
@@ -264,7 +400,10 @@ async fn sweep(
 /// copy removed (identical to `CopyAction::undo`, reused directly rather
 /// than reimplemented).
 async fn rollback(entries: &[Entry], deleted_paths: &HashSet<PathBuf>, dest_root: &Path) {
-    let copy_action = CopyAction { overwrite: true };
+    let copy_action = CopyAction {
+        overwrite: true,
+        skip_if_identical: false,
+    };
     for entry in entries.iter().rev() {
         if deleted_paths.contains(&entry.path) {
             let _ = restore_source(entry, dest_root).await;
@@ -278,7 +417,7 @@ async fn remove_source(entry: &Entry) -> Result<()> {
     match tokio::fs::remove_file(&entry.path).await {
         Ok(()) => Ok(()),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(classify_error(e, &entry.path)),
+        Err(e) => Err(classify_io_error(e, entry.path.clone(), 0)),
     }
 }
 
@@ -286,30 +425,11 @@ async fn restore_source(entry: &Entry, dest_root: &Path) -> Result<()> {
     let dest_path = dest_root.join(&entry.relative_path);
     tokio::fs::copy(&dest_path, &entry.path)
         .await
-        .map_err(|e| classify_error(e, &entry.path))?;
+        .map_err(|e| classify_io_error(e, entry.path.clone(), 0))?;
     tokio::fs::remove_file(&dest_path)
         .await
-        .map_err(|e| classify_error(e, &dest_path))?;
+        .map_err(|e| classify_io_error(e, dest_path, 0))?;
     Ok(())
-}
-
-fn classify_error(err: io::Error, path: &Path) -> Error {
-    match err.kind() {
-        io::ErrorKind::NotFound => Error::SourceNotFound {
-            path: path.to_path_buf(),
-        },
-        io::ErrorKind::PermissionDenied => Error::PermissionDenied {
-            path: path.to_path_buf(),
-        },
-        io::ErrorKind::StorageFull => Error::NoSpace {
-            needed: 0,
-            available: 0,
-        },
-        _ => Error::Io {
-            path: path.to_path_buf(),
-            source: err,
-        },
-    }
 }
 
 #[cfg(test)]
@@ -317,6 +437,8 @@ mod tests {
     use std::fs;
 
     use tempfile::tempdir;
+
+    use crate::error::Error;
 
     use super::*;
 
@@ -380,6 +502,7 @@ mod tests {
             &source,
             &dest,
             false,
+            false, // skip_if_identical
             false,
             false,
             256,
@@ -401,6 +524,111 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn same_filesystem_move_creates_missing_dest_parent_dirs() {
+        let root = tempdir().unwrap();
+        let source = root.path().join("src.txt");
+        let dest = root
+            .path()
+            .join("does")
+            .join("not")
+            .join("exist")
+            .join("dst.txt");
+        fs::write(&source, b"hello").unwrap();
+
+        let outcome = move_path(
+            &source,
+            &dest,
+            false,
+            false, // skip_if_identical
+            false,
+            false,
+            256,
+            &BatchConfig::default(),
+            2,
+            CancellationToken::new(),
+            ProgressReporter::noop(),
+            &TokioRenamer,
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.succeeded.is_empty());
+        assert!(!source.exists());
+        assert_eq!(fs::read(&dest).unwrap(), b"hello");
+    }
+
+    #[cfg(feature = "checksum")]
+    #[tokio::test]
+    async fn same_filesystem_move_without_overwrite_fails_on_a_differing_destination() {
+        let root = tempdir().unwrap();
+        let source = root.path().join("src.txt");
+        let dest = root.path().join("dst.txt");
+        fs::write(&source, b"new content").unwrap();
+        fs::write(&dest, b"old content").unwrap();
+
+        let result = move_path(
+            &source,
+            &dest,
+            false,
+            false, // skip_if_identical
+            false,
+            false,
+            256,
+            &BatchConfig::default(),
+            2,
+            CancellationToken::new(),
+            ProgressReporter::noop(),
+            &TokioRenamer,
+        )
+        .await;
+
+        assert!(matches!(result, Err(Error::DestExists { .. })));
+        assert!(
+            source.exists(),
+            "a rejected move must leave source in place"
+        );
+        assert_eq!(fs::read(&dest).unwrap(), b"old content");
+    }
+
+    #[cfg(feature = "checksum")]
+    #[tokio::test]
+    async fn same_filesystem_move_skips_an_identical_destination_but_still_removes_source() {
+        let root = tempdir().unwrap();
+        let source = root.path().join("src.txt");
+        let dest = root.path().join("dst.txt");
+        fs::write(&source, b"same content").unwrap();
+        fs::write(&dest, b"same content").unwrap();
+
+        let outcome = move_path(
+            &source,
+            &dest,
+            false,
+            true, // skip_if_identical
+            false,
+            false,
+            256,
+            &BatchConfig::default(),
+            2,
+            CancellationToken::new(),
+            ProgressReporter::noop(),
+            &TokioRenamer,
+        )
+        .await
+        .unwrap();
+
+        assert!(outcome.succeeded.is_empty());
+        assert!(
+            outcome.skipped.is_empty(),
+            "the fast path never enumerates entries"
+        );
+        assert!(
+            !source.exists(),
+            "the move should still complete by removing the now-redundant source"
+        );
+        assert_eq!(fs::read(&dest).unwrap(), b"same content");
+    }
+
+    #[tokio::test]
     async fn cross_device_fallback_copies_then_deletes_sources() {
         let src_dir = tempdir().unwrap();
         let dest_dir = tempdir().unwrap();
@@ -411,6 +639,7 @@ mod tests {
             src_dir.path(),
             dest_dir.path(),
             false,
+            false, // skip_if_identical
             false,
             false,
             256,
@@ -443,6 +672,7 @@ mod tests {
             src_dir.path(),
             dest_dir.path(),
             false,
+            false, // skip_if_identical
             false,
             false,
             256,

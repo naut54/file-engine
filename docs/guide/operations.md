@@ -10,7 +10,10 @@ do with the handle.
 ## Shared options
 
 These appear (with the same name and meaning) on every batching-pipeline
-builder — `CopyBuilder`, `MoveBuilder`, `SyncBuilder` — unless noted:
+builder — `CopyBuilder`, `MoveBuilder`, `MoveManyBuilder`, `SyncBuilder`
+— unless noted. `RemoveBuilder` is the exception: it has no destination,
+so it shares only `.on_error()` and `.batch_concurrency()` from this
+list — see [Remove](#remove) below for its own options.
 
 | Method | Default | Meaning |
 |---|---|---|
@@ -53,6 +56,38 @@ copy-then-delete-source automatically, using the same batching pipeline
 as `copy` — every option above applies to that fallback path too. On the
 fast (same-filesystem) path, no `Progress` events are emitted at all —
 there's nothing to report, the whole move is one atomic syscall.
+
+## Remove
+
+`RemoveBuilder` deletes files under a root that match a filter, rather
+than a path outright — there's no destination, so none of the
+copy/move/sync options above apply beyond `.on_error()` and
+`.batch_concurrency()`.
+
+| Method | Default | Meaning |
+|---|---|---|
+| `.extensions(...)` | any | Only files with one of these extensions (case-insensitive, no leading dot) match. |
+| `.exclude(...)` | none | Glob patterns (relative to the root) that exclude an otherwise-matching entry. |
+| `.min_size(bytes)` / `.max_size(bytes)` | unbounded | Size range an entry must fall in, inclusive on both ends. |
+| `.modified_after(t)` / `.modified_before(t)` | unbounded | Modified-time range, inclusive. A file with no readable mtime never matches once either is set. |
+| `.max_depth(n)` | unbounded | Bounds how far the walk descends; the root is depth 0, its immediate children depth 1. |
+| `.follow_symlinks(bool)` | `false` | Off by default (a symlink is skipped, not followed). When `true`, a symlinked directory's contents become eligible too, and a symlink cycle surfaces as a per-entry error rather than hanging. |
+| `.dry_run(bool)` | **`true`** | Preview only: matches land in `RemoveOutcome::previewed` and nothing is touched. Pass `false` to actually remove. |
+| `.hard_delete(bool)` | **`false`** | Matched entries go to the platform trash/recycle bin by default. Pass `true` to unlink them permanently instead. |
+| `.allow_unfiltered_delete(bool)` | `false` | Required to run with every filter above left unset — otherwise `.start()`'s `Handle` resolves to `Err(Error::RemoveCriteriaRequired)` before anything is touched. |
+
+The two defaults in bold are the reverse of every other builder in this
+crate — biased toward safety since this is the one irreversible
+operation the crate offers. A platform/environment with no trash service
+available fails per-entry with `Error::TrashFailed` rather than silently
+falling back to a permanent delete.
+
+`ErrorStrategy::Undo` stops the batch on the first failure the same as
+it does for copy/move, but can't roll back entries already removed — a
+hard-deleted file is gone, and a trashed one has no reliable
+cross-platform restore API. Preview with the default `.dry_run(true)`
+before committing to `.dry_run(false)` rather than relying on `Undo` to
+walk back a mistake.
 
 ## Sync's outcome shape
 

@@ -5,7 +5,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{Error, Result};
+use crate::error::{classify_io_error, Error, Result};
 use crate::watch_event::WatchEvent;
 use crate::watch_handle::WatchHandle;
 
@@ -95,7 +95,7 @@ fn build_watcher(
     // `watch()` below — that path still ends up an `Err`, just
     // classified by `notify`, which is the same outcome as before.
     if let Err(err) = std::fs::metadata(path) {
-        return Err(classify_io_error(err, path));
+        return Err(classify_io_error(err, path.to_path_buf(), 0));
     }
 
     let fatal_tx = Arc::new(Mutex::new(Some(fatal_tx)));
@@ -135,28 +135,10 @@ fn classify_notify_error(err: notify::Error, path: &Path) -> Error {
         notify::ErrorKind::PathNotFound => Error::SourceNotFound {
             path: path.to_path_buf(),
         },
-        notify::ErrorKind::Io(io_err) => classify_io_error(io_err, path),
+        notify::ErrorKind::Io(io_err) => classify_io_error(io_err, path.to_path_buf(), 0),
         _ => Error::Io {
             path: path.to_path_buf(),
             source: std::io::Error::other(err.to_string()),
-        },
-    }
-}
-
-/// Shared by the pre-flight `metadata()` check and
-/// `classify_notify_error`'s `Io` arm, so a missing or unreadable path
-/// produces the same `Error` whichever of the two noticed it first.
-fn classify_io_error(err: std::io::Error, path: &Path) -> Error {
-    match err.kind() {
-        std::io::ErrorKind::NotFound => Error::SourceNotFound {
-            path: path.to_path_buf(),
-        },
-        std::io::ErrorKind::PermissionDenied => Error::PermissionDenied {
-            path: path.to_path_buf(),
-        },
-        _ => Error::Io {
-            path: path.to_path_buf(),
-            source: err,
         },
     }
 }

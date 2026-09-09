@@ -1,17 +1,18 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
+use crate::checksum::hash_file;
 use crate::error::{Error, Result};
 
 use super::error_strategy::AnalysisErrorStrategy;
 use super::progress::{AnalysisProgress, AnalysisProgressReporter};
 use super::report::DuplicateGroup;
-use super::util::{classify_io_error, default_concurrency};
+use super::util::default_concurrency;
 use super::Entry;
 
 /// Returned alongside the duplicate-group findings: hashing a candidate
@@ -133,12 +134,4 @@ pub(crate) async fn detect_duplicates(
         errors,
         errors_total,
     })
-}
-
-fn hash_file(path: &Path) -> Result<[u8; 32]> {
-    let mut hasher = blake3::Hasher::new();
-    let mut file =
-        std::fs::File::open(path).map_err(|e| classify_io_error(e, path.to_path_buf()))?;
-    std::io::copy(&mut file, &mut hasher).map_err(|e| classify_io_error(e, path.to_path_buf()))?;
-    Ok(*hasher.finalize().as_bytes())
 }

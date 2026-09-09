@@ -29,6 +29,14 @@ pub enum StopReason {
 #[non_exhaustive]
 pub struct OperationOutcome {
     pub succeeded: Vec<Entry>,
+    /// Entries left untouched because the destination already held
+    /// byte-identical content — populated only when `.overwrite(false)`
+    /// (the default) is paired with `.skip_if_identical(true)` (the
+    /// `checksum` feature; see `CopyBuilder`/`MoveBuilder`). Disjoint
+    /// from `succeeded`: nothing was written, so counting it as a normal
+    /// success would overstate the bytes this run actually transferred.
+    /// Always empty otherwise.
+    pub skipped: Vec<Entry>,
     pub failed: Vec<(Entry, Error)>,
     /// Populated only by move's deferred deletion sweep: entries that
     /// copied successfully but whose original source could not be
@@ -46,6 +54,14 @@ pub struct OperationOutcome {
     /// many existing construction sites. Always empty on non-Unix or
     /// when permission preservation wasn't requested.
     pub directories_failed: Vec<(PathBuf, Error)>,
+    /// Populated only by `MoveManyBuilder`: whole-source failures that
+    /// happen before any per-file `Entry` exists for that source (the
+    /// atomic-rename fast path failed for a reason other than
+    /// cross-device, or the source vanished before it could be
+    /// scanned) — one entry per failed source, keyed by that source's
+    /// original path rather than an `Entry`, since none was ever built.
+    /// Always empty for `copy`/`move`.
+    pub sources_failed: Vec<(PathBuf, Error)>,
     /// Wall time the operation took, stamped where the outcome is
     /// produced for the caller. The counterpart to `Handle::elapsed()`
     /// for after the handle has been consumed by `.await`.

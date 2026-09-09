@@ -3,7 +3,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
-use crate::error::{Error, Result};
+use crate::error::{classify_io_error, Error, Result};
 use crate::profiler::Entry;
 
 /// Lets the dispatcher stay generic over what happens to an entry (copy,
@@ -26,7 +26,7 @@ pub(crate) trait EntryAction: Send + Sync {
         &'a self,
         entry: &'a Entry,
         dest_root: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
+    ) -> Pin<Box<dyn Future<Output = Result<EntryOutcome>> + Send + 'a>>;
     fn undo<'a>(
         &'a self,
         entry: &'a Entry,
@@ -47,9 +47,61 @@ pub(crate) trait EntryAction: Send + Sync {
     }
 }
 
+/// What `EntryAction::execute` actually did, distinct from a bare
+/// success so the dispatcher (and `OperationOutcome`) can tell "wrote
+/// the destination" apart from "left it alone because it already
+/// matched" — the latter goes to `OperationOutcome::skipped`, not
+/// `succeeded`, since no bytes were transferred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EntryOutcome {
+    Written,
+    Skipped,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct CopyAction {
     pub overwrite: bool,
+    /// Only ever `true` when the `checksum` feature is enabled (the one
+    /// builder method that sets it is cfg-gated) — kept as a plain,
+    /// unconditional `bool` field regardless, same reasoning as
+    /// `preserve_permissions` elsewhere: a platform/feature-conditional
+    /// struct shape isn't worth it for a single bool. Genuinely unread
+    /// without `checksum` (the fallback `identical_to_existing` below
+    /// never looks at it), hence the `allow`.
+    #[cfg_attr(not(feature = "checksum"), allow(dead_code))]
+    pub skip_if_identical: bool,
+}
+
+impl CopyAction {
+    /// Whether `entry`'s source and the already-existing `dest_path`
+    /// (whose length the caller already has from its own `metadata()`
+    /// call) are byte-identical. Only ever consulted when `!overwrite`
+    /// and `dest_path` exists — `skip_if_identical` is meaningless
+    /// otherwise. No-op fallback when `checksum` is disabled, so
+    /// `execute()` below doesn't need its own `#[cfg]` — same pattern as
+    /// `operations/pipeline.rs`'s `apply_directory_permissions`.
+    #[cfg(feature = "checksum")]
+    async fn identical_to_existing(
+        &self,
+        entry: &Entry,
+        dest_path: &Path,
+        dest_len: u64,
+    ) -> Result<bool> {
+        if !self.skip_if_identical {
+            return Ok(false);
+        }
+        crate::checksum::files_identical(&entry.path, dest_path, entry.size, dest_len).await
+    }
+
+    #[cfg(not(feature = "checksum"))]
+    async fn identical_to_existing(
+        &self,
+        _entry: &Entry,
+        _dest_path: &Path,
+        _dest_len: u64,
+    ) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 impl EntryAction for CopyAction {
@@ -57,7 +109,7 @@ impl EntryAction for CopyAction {
         &'a self,
         entry: &'a Entry,
         dest_root: &'a Path,
-    ) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>> {
+    ) -> Pin<Box<dyn Future<Output = Result<EntryOutcome>> + Send + 'a>> {
         Box::pin(async move {
             let dest_path = dest_root.join(&entry.relative_path);
 
@@ -68,14 +120,22 @@ impl EntryAction for CopyAction {
             if let Some(parent) = dest_path.parent() {
                 tokio::fs::create_dir_all(parent)
                     .await
-                    .map_err(|e| classify_error(e, parent, 0))?;
+                    .map_err(|e| classify_io_error(e, parent.to_path_buf(), 0))?;
             }
 
             if !self.overwrite {
                 match tokio::fs::metadata(&dest_path).await {
-                    Ok(_) => return Err(Error::DestExists { path: dest_path }),
+                    Ok(existing) => {
+                        if self
+                            .identical_to_existing(entry, &dest_path, existing.len())
+                            .await?
+                        {
+                            return Ok(EntryOutcome::Skipped);
+                        }
+                        return Err(Error::DestExists { path: dest_path });
+                    }
                     Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-                    Err(e) => return Err(classify_error(e, &dest_path, 0)),
+                    Err(e) => return Err(classify_io_error(e, dest_path, 0)),
                 }
             }
 
@@ -86,8 +146,8 @@ impl EntryAction for CopyAction {
             // only real effect is on directories, not files.
             tokio::fs::copy(&entry.path, &dest_path)
                 .await
-                .map(|_| ())
-                .map_err(|e| classify_error(e, &entry.path, entry.size))
+                .map(|_| EntryOutcome::Written)
+                .map_err(|e| classify_io_error(e, entry.path.clone(), entry.size))
         })
     }
 
@@ -105,32 +165,9 @@ impl EntryAction for CopyAction {
             match tokio::fs::remove_file(&dest_path).await {
                 Ok(()) => Ok(()),
                 Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-                Err(e) => Err(classify_error(e, &dest_path, 0)),
+                Err(e) => Err(classify_io_error(e, dest_path, 0)),
             }
         })
-    }
-}
-
-/// Maps a raw `io::Error` onto the crate's `Error` variants. `needed` is
-/// only meaningful for `StorageFull`; `available` isn't queried at this
-/// level (would need an extra statvfs-style syscall) so it's reported as
-/// 0 rather than fabricated.
-fn classify_error(err: io::Error, path: &Path, needed: u64) -> Error {
-    match err.kind() {
-        io::ErrorKind::NotFound => Error::SourceNotFound {
-            path: path.to_path_buf(),
-        },
-        io::ErrorKind::PermissionDenied => Error::PermissionDenied {
-            path: path.to_path_buf(),
-        },
-        io::ErrorKind::StorageFull => Error::NoSpace {
-            needed,
-            available: 0,
-        },
-        _ => Error::Io {
-            path: path.to_path_buf(),
-            source: err,
-        },
     }
 }
 
@@ -163,7 +200,10 @@ mod tests {
         let relative_path = PathBuf::from("nested/deep/file.txt");
         let e = entry(src_path, relative_path.clone(), 11);
 
-        let action = CopyAction { overwrite: false };
+        let action = CopyAction {
+            overwrite: false,
+            skip_if_identical: false,
+        };
         action.execute(&e, dest_dir.path()).await.unwrap();
 
         let dest_path = dest_dir.path().join(&relative_path);
@@ -183,7 +223,10 @@ mod tests {
         fs::write(&dest_path, b"old content").unwrap();
 
         let e = entry(src_path, relative_path, 11);
-        let action = CopyAction { overwrite: false };
+        let action = CopyAction {
+            overwrite: false,
+            skip_if_identical: false,
+        };
 
         let result = action.execute(&e, dest_dir.path()).await;
         assert!(matches!(result, Err(Error::DestExists { .. })));
@@ -203,10 +246,67 @@ mod tests {
         fs::write(&dest_path, b"old content").unwrap();
 
         let e = entry(src_path, relative_path, 11);
-        let action = CopyAction { overwrite: true };
+        let action = CopyAction {
+            overwrite: true,
+            skip_if_identical: false,
+        };
 
         action.execute(&e, dest_dir.path()).await.unwrap();
         assert_eq!(fs::read(&dest_path).unwrap(), b"new content");
+    }
+
+    #[cfg(feature = "checksum")]
+    #[tokio::test]
+    async fn skip_if_identical_leaves_a_matching_destination_untouched() {
+        let src_dir = tempdir().unwrap();
+        let dest_dir = tempdir().unwrap();
+
+        let src_path = src_dir.path().join("file.txt");
+        fs::write(&src_path, b"same content").unwrap();
+
+        let relative_path = PathBuf::from("file.txt");
+        let dest_path = dest_dir.path().join(&relative_path);
+        fs::write(&dest_path, b"same content").unwrap();
+        let dest_modified_before = fs::metadata(&dest_path).unwrap().modified().unwrap();
+
+        let e = entry(src_path, relative_path, 12);
+        let action = CopyAction {
+            overwrite: false,
+            skip_if_identical: true,
+        };
+
+        let outcome = action.execute(&e, dest_dir.path()).await.unwrap();
+        assert_eq!(outcome, EntryOutcome::Skipped);
+        assert_eq!(fs::read(&dest_path).unwrap(), b"same content");
+        assert_eq!(
+            fs::metadata(&dest_path).unwrap().modified().unwrap(),
+            dest_modified_before,
+            "an identical destination must not be rewritten"
+        );
+    }
+
+    #[cfg(feature = "checksum")]
+    #[tokio::test]
+    async fn skip_if_identical_still_fails_on_a_genuinely_different_destination() {
+        let src_dir = tempdir().unwrap();
+        let dest_dir = tempdir().unwrap();
+
+        let src_path = src_dir.path().join("file.txt");
+        fs::write(&src_path, b"new content").unwrap();
+
+        let relative_path = PathBuf::from("file.txt");
+        let dest_path = dest_dir.path().join(&relative_path);
+        fs::write(&dest_path, b"old content").unwrap();
+
+        let e = entry(src_path, relative_path, 11);
+        let action = CopyAction {
+            overwrite: false,
+            skip_if_identical: true,
+        };
+
+        let result = action.execute(&e, dest_dir.path()).await;
+        assert!(matches!(result, Err(Error::DestExists { .. })));
+        assert_eq!(fs::read(&dest_path).unwrap(), b"old content");
     }
 
     #[tokio::test]
@@ -222,7 +322,10 @@ mod tests {
         let entry_a = entry(src_path_a, PathBuf::from("shared/a.txt"), 1);
         let entry_b = entry(src_path_b, PathBuf::from("shared/b.txt"), 1);
 
-        let action = CopyAction { overwrite: false };
+        let action = CopyAction {
+            overwrite: false,
+            skip_if_identical: false,
+        };
         let dest_root = dest_dir.path().to_path_buf();
 
         let (result_a, result_b) = tokio::join!(
@@ -251,7 +354,10 @@ mod tests {
         let sibling = dest_dir.path().join("sibling.txt");
         fs::write(&sibling, b"leave me alone").unwrap();
 
-        let action = CopyAction { overwrite: false };
+        let action = CopyAction {
+            overwrite: false,
+            skip_if_identical: false,
+        };
         action.execute(&e, dest_dir.path()).await.unwrap();
 
         let dest_path = dest_dir.path().join(&relative_path);

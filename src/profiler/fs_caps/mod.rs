@@ -1,4 +1,3 @@
-use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -99,20 +98,6 @@ fn raw_probe(_path: &Path) -> Result<FilesystemCapabilities> {
         timestamp_granularity: Duration::ZERO,
         write_integrity_risk: false,
     })
-}
-
-/// Shared by `unix.rs`/`windows.rs` for the "the probing syscall itself
-/// failed" case — matches the classification `scan.rs` already does
-/// for its own I/O errors, kept separate rather than shared since both
-/// are small and module-local (same pattern as `pipeline.rs`'s own
-/// `classify_error`).
-#[cfg(any(unix, windows))]
-fn classify_io_error(err: io::Error, path: PathBuf) -> Error {
-    match err.kind() {
-        io::ErrorKind::NotFound => Error::SourceNotFound { path },
-        io::ErrorKind::PermissionDenied => Error::PermissionDenied { path },
-        _ => Error::Io { path, source: err },
-    }
 }
 
 /// Case sensitivity derived from the filesystem name, for the platforms

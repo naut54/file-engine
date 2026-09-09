@@ -6,7 +6,7 @@ use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::{Error, Result};
+use crate::error::{classify_io_error, Error, Result};
 use crate::planner::{
     dispatch, plan, BatchConfig, CopyAction, ErrorStrategy, OperationOutcome, StopReason,
 };
@@ -24,6 +24,7 @@ pub(crate) async fn run_copy_pipeline(
     source: &Path,
     dest: &Path,
     overwrite: bool,
+    skip_if_identical: bool,
     preserve_permissions: bool,
     allow_filesystem_integrity_risk: bool,
     small_file_threshold: u64,
@@ -32,13 +33,19 @@ pub(crate) async fn run_copy_pipeline(
     cancel: CancellationToken,
     reporter: ProgressReporter,
 ) -> Result<OperationOutcome> {
-    let workload = scan(source, small_file_threshold).await?;
+    let workload = scan(
+        source,
+        small_file_threshold,
+        crate::profiler::ScanOptions::default(),
+    )
+    .await?;
     let dest_caps = probe_fs_caps(dest).await?;
     run_workload_pipeline(
         workload,
         dest,
         &dest_caps,
         overwrite,
+        skip_if_identical,
         preserve_permissions,
         allow_filesystem_integrity_risk,
         small_file_threshold,
@@ -73,6 +80,7 @@ pub(crate) async fn run_workload_pipeline(
     dest: &Path,
     dest_caps: &FilesystemCapabilities,
     overwrite: bool,
+    skip_if_identical: bool,
     preserve_permissions: bool,
     allow_filesystem_integrity_risk: bool,
     // Only used to report the split back out via `Progress::Planned` —
@@ -180,7 +188,10 @@ pub(crate) async fn run_workload_pipeline(
     );
 
     let execution_plan = plan(workload, config);
-    let action = CopyAction { overwrite };
+    let action = CopyAction {
+        overwrite,
+        skip_if_identical,
+    };
     let dispatch_outcome = dispatch(
         execution_plan,
         action,
@@ -223,6 +234,62 @@ fn dest_path_for(dir: &DirEntry, dest_root: &Path) -> PathBuf {
     } else {
         dest_root.join(&dir.relative_path)
     }
+}
+
+/// Rewrites every `relative_path` in `workload` (scanned relative to a
+/// single source root) to be relative to `dest_root` instead, by
+/// prefixing with `prefix` — that source's basename under a shared
+/// destination directory. The scanned root's own `DirEntry` (empty
+/// `relative_path`, see its doc comment) becomes exactly `prefix`.
+///
+/// Used only by `move_many.rs`: scanning each of several sources
+/// produces a `Workload` per source, each relative to its own root: this
+/// is what lets all of them be concatenated (`merge_workloads` below)
+/// into one `Workload` that `run_workload_pipeline` can plan and
+/// dispatch in a single pass, sharing one concurrency pool and one
+/// `ErrorStrategy` scope across every source instead of one per source.
+///
+/// `source_is_file` matters because `scan()` doesn't represent a
+/// file-root scan the same way it represents a directory-root one: a
+/// directory root's own entry gets an *empty* `relative_path` (so
+/// joining `prefix` onto it correctly produces exactly `prefix`), but a
+/// file root's single entry already carries its own basename as
+/// `relative_path` (see `scan.rs`'s file branch) — joining `prefix` onto
+/// *that* would double it (`"notes.txt/notes.txt"`). So a file-root
+/// workload's one entry has its `relative_path` replaced with `prefix`
+/// outright instead of joined.
+pub(crate) fn prefix_workload(
+    mut workload: Workload,
+    prefix: &Path,
+    source_is_file: bool,
+) -> Workload {
+    if source_is_file {
+        for entry in workload.small.iter_mut().chain(workload.large.iter_mut()) {
+            entry.relative_path = prefix.to_path_buf();
+        }
+        return workload;
+    }
+    for entry in workload.small.iter_mut().chain(workload.large.iter_mut()) {
+        entry.relative_path = prefix.join(&entry.relative_path);
+    }
+    for dir in &mut workload.directories {
+        dir.relative_path = prefix.join(&dir.relative_path);
+    }
+    workload
+}
+
+/// Concatenates already-`prefix_workload`-ed workloads into one. No
+/// dedup/collision handling here — `move_many.rs` rejects duplicate
+/// source basenames up front, before any of this runs, so two entries
+/// landing on the same `relative_path` can't happen.
+pub(crate) fn merge_workloads(workloads: Vec<Workload>) -> Workload {
+    let mut merged = Workload::default();
+    for workload in workloads {
+        merged.small.extend(workload.small);
+        merged.large.extend(workload.large);
+        merged.directories.extend(workload.directories);
+    }
+    merged
 }
 
 /// Every directory (relative path, including the root as an empty
@@ -300,7 +367,7 @@ async fn ensure_directories_exist(
                     failures
                         .lock()
                         .unwrap()
-                        .push((dest_path.clone(), classify_error(err, &dest_path)));
+                        .push((dest_path.clone(), classify_io_error(err, dest_path, 0)));
                 }
             }
         });
@@ -337,7 +404,7 @@ async fn apply_directory_permissions(
         if let Err(err) =
             tokio::fs::set_permissions(&dest_path, std::fs::Permissions::from_mode(mode)).await
         {
-            failures.push((dest_path.clone(), classify_error(err, &dest_path)));
+            failures.push((dest_path.clone(), classify_io_error(err, dest_path, 0)));
         }
     }
     failures
@@ -354,25 +421,6 @@ async fn apply_directory_permissions(
     Vec::new()
 }
 
-fn classify_error(err: std::io::Error, path: &Path) -> Error {
-    match err.kind() {
-        std::io::ErrorKind::NotFound => Error::SourceNotFound {
-            path: path.to_path_buf(),
-        },
-        std::io::ErrorKind::PermissionDenied => Error::PermissionDenied {
-            path: path.to_path_buf(),
-        },
-        std::io::ErrorKind::StorageFull => Error::NoSpace {
-            needed: 0,
-            available: 0,
-        },
-        _ => Error::Io {
-            path: path.to_path_buf(),
-            source: err,
-        },
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -383,7 +431,7 @@ mod tests {
     use crate::planner::ErrorStrategy;
     #[cfg(all(unix, feature = "permissions"))]
     use crate::profiler::DirEntry;
-    use crate::profiler::DEFAULT_SMALL_FILE_THRESHOLD;
+    use crate::profiler::{ScanOptions, DEFAULT_SMALL_FILE_THRESHOLD};
 
     use super::*;
 
@@ -399,6 +447,7 @@ mod tests {
             &src_file,
             dest_dir.path(),
             false,
+            false, // skip_if_identical
             false,
             false,
             256,
@@ -444,6 +493,7 @@ mod tests {
             src_dir.path(),
             dest_dir.path(),
             false,
+            false, // skip_if_identical
             false,
             false,
             100, // threshold: a.txt/b.txt are small, big.bin is large
@@ -489,6 +539,7 @@ mod tests {
             src_dir.path(),
             dest_dir.path(),
             true,
+            false, // skip_if_identical
             true,
             false,
             256,
@@ -525,6 +576,7 @@ mod tests {
             src_dir.path(),
             &dest_root,
             false,
+            false, // skip_if_identical
             true,
             false,
             256,
@@ -558,6 +610,7 @@ mod tests {
             src_dir.path(),
             dest_dir.path(),
             true,
+            false, // skip_if_identical
             false,
             false,
             256,
@@ -610,6 +663,7 @@ mod tests {
             src_dir.path(),
             dest_dir.path(),
             false,
+            false, // skip_if_identical
             true,
             false,
             256,
@@ -752,6 +806,7 @@ mod tests {
             dest_dir.path(),
             &dest_caps,
             false,
+            false, // skip_if_identical
             false,
             false,
             DEFAULT_SMALL_FILE_THRESHOLD,
@@ -834,6 +889,7 @@ mod tests {
             dest_dir.path(),
             &dest_caps,
             false,
+            false, // skip_if_identical
             false,
             false,
             DEFAULT_SMALL_FILE_THRESHOLD,
@@ -883,12 +939,15 @@ mod tests {
         let dest_dir = tempdir().unwrap();
         fs::write(src_dir.path().join("a.txt"), b"a").unwrap();
 
-        let workload = scan(src_dir.path(), 256).await.unwrap();
+        let workload = scan(src_dir.path(), 256, ScanOptions::default())
+            .await
+            .unwrap();
         let result = run_workload_pipeline(
             workload,
             dest_dir.path(),
             &risky_caps(),
             false,
+            false, // skip_if_identical
             false,
             false, // allow_filesystem_integrity_risk
             DEFAULT_SMALL_FILE_THRESHOLD,
@@ -912,12 +971,15 @@ mod tests {
         let dest_dir = tempdir().unwrap();
         fs::write(src_dir.path().join("a.txt"), b"a").unwrap();
 
-        let workload = scan(src_dir.path(), 256).await.unwrap();
+        let workload = scan(src_dir.path(), 256, ScanOptions::default())
+            .await
+            .unwrap();
         let outcome = run_workload_pipeline(
             workload,
             dest_dir.path(),
             &risky_caps(),
             false,
+            false, // skip_if_identical
             false,
             true, // allow_filesystem_integrity_risk
             DEFAULT_SMALL_FILE_THRESHOLD,
@@ -1086,6 +1148,7 @@ mod tests {
             src_dir.path(),
             dest_dir.path(),
             false,
+            false, // skip_if_identical
             false,
             false,
             256,

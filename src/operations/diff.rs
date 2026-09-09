@@ -2,6 +2,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+#[cfg(feature = "checksum")]
+use crate::error::classify_io_error;
 use crate::error::{Error, Result};
 use crate::paths::normalize_for_comparison;
 use crate::profiler::{scan, Entry};
@@ -83,7 +85,7 @@ pub(crate) async fn diff(
 /// Diff doesn't care about the small/large split the Profiler produces
 /// for batching purposes — flatten both buckets into one list.
 async fn flat_entries(root: &Path) -> Result<Vec<Entry>> {
-    let workload = scan(root, u64::MAX).await?;
+    let workload = scan(root, u64::MAX, crate::profiler::ScanOptions::default()).await?;
     let mut entries = workload.small;
     entries.extend(workload.large);
     Ok(entries)
@@ -124,24 +126,8 @@ async fn changed(
 async fn hash_file(path: &Path) -> Result<blake3::Hash> {
     let bytes = tokio::fs::read(path)
         .await
-        .map_err(|e| classify_error(e, path))?;
+        .map_err(|e| classify_io_error(e, path.to_path_buf(), 0))?;
     Ok(blake3::hash(&bytes))
-}
-
-#[cfg(feature = "checksum")]
-fn classify_error(err: std::io::Error, path: &Path) -> Error {
-    match err.kind() {
-        std::io::ErrorKind::NotFound => Error::SourceNotFound {
-            path: path.to_path_buf(),
-        },
-        std::io::ErrorKind::PermissionDenied => Error::PermissionDenied {
-            path: path.to_path_buf(),
-        },
-        _ => Error::Io {
-            path: path.to_path_buf(),
-            source: err,
-        },
-    }
 }
 
 #[cfg(test)]
