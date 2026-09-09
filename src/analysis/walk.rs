@@ -1,7 +1,8 @@
 use std::collections::{BinaryHeap, HashMap};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use globset::GlobSet;
 use jwalk::{Parallelism, WalkDir};
 
 use crate::error::{classify_io_error, Error, Result};
@@ -26,6 +27,8 @@ pub(crate) struct WalkParams {
     /// Directory-read/stat worker count for the underlying `jwalk`
     /// traversal — see `AnalyzeBuilder::walk_concurrency`.
     pub(crate) walk_concurrency: usize,
+    /// See `AnalyzeBuilder::estimate_total`.
+    pub(crate) estimate_total: bool,
 }
 
 pub(crate) struct WalkOutcome {
@@ -127,15 +130,18 @@ impl Aggregator {
         self.file_count += 1;
         self.total_size += entry.size;
 
-        if self.top_n > 0 {
-            if self.largest.len() < self.top_n {
-                self.largest.push(BySize(entry.clone()));
-            } else if let Some(smallest) = self.largest.peek() {
-                if entry.size > smallest.0.size {
-                    self.largest.pop();
-                    self.largest.push(BySize(entry.clone()));
-                }
-            }
+        // Decided up front, from `entry.size` alone, so the heap and
+        // duplicate-candidate pushes below can move `entry` instead of
+        // cloning it in the common case where only one of them ends up
+        // wanting it.
+        let keep_in_heap = self.top_n > 0
+            && (self.largest.len() < self.top_n
+                || self
+                    .largest
+                    .peek()
+                    .is_some_and(|smallest| entry.size > smallest.0.size));
+        if keep_in_heap && self.largest.len() >= self.top_n {
+            self.largest.pop();
         }
 
         let ext = entry
@@ -178,11 +184,21 @@ impl Aggregator {
         }
 
         #[cfg(feature = "checksum")]
-        if self.collect_duplicate_candidates {
-            self.duplicate_candidates.push(entry);
+        {
+            let goes_to_duplicates = self.collect_duplicate_candidates;
+            if keep_in_heap && goes_to_duplicates {
+                self.largest.push(BySize(entry.clone()));
+                self.duplicate_candidates.push(entry);
+            } else if keep_in_heap {
+                self.largest.push(BySize(entry));
+            } else if goes_to_duplicates {
+                self.duplicate_candidates.push(entry);
+            }
         }
         #[cfg(not(feature = "checksum"))]
-        let _ = entry;
+        if keep_in_heap {
+            self.largest.push(BySize(entry));
+        }
     }
 
     fn finish(self) -> AggregatorOutcome {
@@ -230,45 +246,11 @@ pub(crate) async fn walk(
         .expect("walk blocking task panicked")
 }
 
-fn walk_blocking(
-    params: WalkParams,
-    cancel: tokio_util::sync::CancellationToken,
-    reporter: AnalysisProgressReporter,
-) -> Result<WalkOutcome> {
-    let excludes = params.filter.compiled_excludes()?;
-    let now = SystemTime::now();
-    let mut aggregator = Aggregator::new(&params, now);
-    let mut errors: Vec<(PathBuf, Error)> = Vec::new();
-    let mut errors_total = 0usize;
-
-    let root_metadata = std::fs::metadata(&params.root)
-        .map_err(|e| classify_io_error(e, params.root.clone(), 0))?;
-
-    if root_metadata.is_file() {
-        let relative_path = params
-            .root
-            .file_name()
-            .map(PathBuf::from)
-            .unwrap_or_else(|| params.root.clone());
-        let size = root_metadata.len();
-        let modified = root_metadata.modified().ok();
-        if params.filter.matches(&relative_path, size, modified) {
-            let entry = Entry {
-                path: params.root.clone(),
-                relative_path,
-                size,
-                modified,
-            };
-            reporter.send(AnalysisProgress::EntryAnalyzed {
-                path: entry.path.clone(),
-            });
-            aggregator.record(entry);
-        }
-        return Ok(aggregator.finish().into_walk_outcome(errors, errors_total));
-    }
-
-    let root = params.root.clone();
-    let exclude_root = root.clone();
+/// Builds the `jwalk` walker shared by the counting pass and the real
+/// aggregation pass, so the two can never drift in what they consider
+/// "the tree" (same exclude pruning, same symlink/depth handling).
+fn build_walker(params: &WalkParams, excludes: Option<GlobSet>) -> WalkDir {
+    let exclude_root = params.root.clone();
 
     let mut walker = WalkDir::new(&params.root)
         .skip_hidden(false)
@@ -295,8 +277,104 @@ fn walk_blocking(
     if let Some(max_depth) = params.max_depth {
         walker = walker.max_depth(max_depth);
     }
+    walker
+}
 
-    for result in walker {
+/// A full extra pass over the tree, counting how many entries would
+/// match the same filters the real walk applies — see
+/// `AnalyzeBuilder::estimate_total`. Walk errors are swallowed here
+/// (this is only an estimate; the real pass reports them properly)
+/// rather than duplicating `error_strategy` handling for a number that's
+/// allowed to be approximate.
+fn count_matching_entries(
+    params: &WalkParams,
+    excludes: Option<GlobSet>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<usize> {
+    let root: &Path = &params.root;
+    let mut count = 0usize;
+
+    for result in build_walker(params, excludes) {
+        if cancel.is_cancelled() {
+            return Err(Error::Cancelled);
+        }
+
+        let Ok(walk_entry) = result else {
+            continue;
+        };
+        if !walk_entry.file_type().is_file() {
+            continue;
+        }
+        let Ok(metadata) = walk_entry.metadata() else {
+            continue;
+        };
+
+        let full_path = walk_entry.path();
+        let relative_path = full_path.strip_prefix(root).unwrap_or(&full_path);
+        if params
+            .filter
+            .matches(relative_path, metadata.len(), metadata.modified().ok())
+        {
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+
+fn walk_blocking(
+    params: WalkParams,
+    cancel: tokio_util::sync::CancellationToken,
+    reporter: AnalysisProgressReporter,
+) -> Result<WalkOutcome> {
+    let excludes = params.filter.compiled_excludes()?;
+    let now = SystemTime::now();
+    let mut aggregator = Aggregator::new(&params, now);
+    let mut errors: Vec<(PathBuf, Error)> = Vec::new();
+    let mut errors_total = 0usize;
+
+    let root_metadata = std::fs::metadata(&params.root)
+        .map_err(|e| classify_io_error(e, params.root.clone(), 0))?;
+
+    if root_metadata.is_file() {
+        // A single file is always its own trivial "total" — not worth a
+        // second pass just to confirm what's already known.
+        reporter.send(AnalysisProgress::Started {
+            estimated_entries: None,
+        });
+
+        let relative_path = params
+            .root
+            .file_name()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| params.root.clone());
+        let size = root_metadata.len();
+        let modified = root_metadata.modified().ok();
+        if params.filter.matches(&relative_path, size, modified) {
+            let entry = Entry {
+                path: params.root.clone(),
+                relative_path,
+                size,
+                modified,
+            };
+            reporter.send(AnalysisProgress::EntryAnalyzed {
+                path: entry.path.clone(),
+            });
+            aggregator.record(entry);
+        }
+        return Ok(aggregator.finish().into_walk_outcome(errors, errors_total));
+    }
+
+    let estimated_entries = if params.estimate_total {
+        Some(count_matching_entries(&params, excludes.clone(), &cancel)?)
+    } else {
+        None
+    };
+    reporter.send(AnalysisProgress::Started { estimated_entries });
+
+    let root = params.root.clone();
+
+    for result in build_walker(&params, excludes) {
         if cancel.is_cancelled() {
             return Err(Error::Cancelled);
         }
@@ -403,6 +481,7 @@ mod tests {
             collect_duplicate_candidates: false,
             max_reported_errors: 1000,
             walk_concurrency: 2,
+            estimate_total: false,
         }
     }
 
@@ -486,11 +565,130 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn estimate_total_reports_the_matching_count_before_any_entries() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), b"x").unwrap();
+        fs::write(dir.path().join("b.log"), b"x").unwrap();
+
+        let mut p = params(dir.path().to_path_buf());
+        p.estimate_total = true;
+        p.filter.extensions = Some(vec!["txt".to_string()]);
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let reporter = AnalysisProgressReporter::new(tx);
+
+        let outcome = walk(p, CancellationToken::new(), reporter).await.unwrap();
+        assert_eq!(outcome.file_count, 1);
+
+        match rx.recv().await {
+            Some(AnalysisProgress::Started { estimated_entries }) => {
+                assert_eq!(estimated_entries, Some(1));
+            }
+            other => panic!("expected Started first, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn estimate_total_off_reports_no_estimate() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("a.txt"), b"x").unwrap();
+
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let reporter = AnalysisProgressReporter::new(tx);
+
+        walk(
+            params(dir.path().to_path_buf()),
+            CancellationToken::new(),
+            reporter,
+        )
+        .await
+        .unwrap();
+
+        match rx.recv().await {
+            Some(AnalysisProgress::Started { estimated_entries }) => {
+                assert_eq!(estimated_entries, None);
+            }
+            other => panic!("expected Started first, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
     async fn nonexistent_path_returns_error() {
         let dir = tempdir().unwrap();
         let missing = dir.path().join("does-not-exist");
 
         let result = walk(params(missing), CancellationToken::new(), noop_reporter()).await;
         assert!(matches!(result, Err(Error::SourceNotFound { .. })));
+    }
+
+    // Mirrors `profiler::scan`'s three symlink tests — `analysis::walk`
+    // wires `follow_symlinks` into `jwalk` the same way `profiler::scan`
+    // wires it into `walkdir`, but until now nothing actually exercised
+    // it here.
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn symlinks_are_skipped_not_followed() {
+        let dir = tempdir().unwrap();
+        let target = dir.path().join("real.txt");
+        fs::write(&target, vec![0u8; 10]).unwrap();
+
+        let link = dir.path().join("link.txt");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let outcome = walk(
+            params(dir.path().to_path_buf()),
+            CancellationToken::new(),
+            noop_reporter(),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.file_count, 1);
+        assert_eq!(
+            outcome.largest_files[0].relative_path,
+            PathBuf::from("real.txt")
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn follow_symlinks_true_walks_into_a_symlinked_directory() {
+        let real_dir = tempdir().unwrap();
+        fs::write(real_dir.path().join("inside.txt"), b"a").unwrap();
+
+        let root_dir = tempdir().unwrap();
+        let link = root_dir.path().join("link");
+        std::os::unix::fs::symlink(real_dir.path(), &link).unwrap();
+
+        let mut p = params(root_dir.path().to_path_buf());
+        p.follow_symlinks = true;
+
+        let outcome = walk(p, CancellationToken::new(), noop_reporter())
+            .await
+            .unwrap();
+
+        assert!(outcome
+            .largest_files
+            .iter()
+            .any(|e| e.relative_path == PathBuf::from("link").join("inside.txt")));
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn follow_symlinks_true_reports_a_cycle_as_an_error_instead_of_hanging() {
+        let dir = tempdir().unwrap();
+        let subdir = dir.path().join("nested");
+        fs::create_dir(&subdir).unwrap();
+        let cycle_link = subdir.join("back_to_root");
+        std::os::unix::fs::symlink(dir.path(), &cycle_link).unwrap();
+
+        let mut p = params(dir.path().to_path_buf());
+        p.follow_symlinks = true;
+        p.error_strategy = AnalysisErrorStrategy::AbortOnError;
+
+        let result = walk(p, CancellationToken::new(), noop_reporter()).await;
+
+        assert!(result.is_err(), "a symlink cycle must not hang the walk");
     }
 }

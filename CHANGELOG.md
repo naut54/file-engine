@@ -4,6 +4,46 @@ All notable changes to this project are documented here.
 
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.5.0]
+
+### Added
+
+- **`AnalyzeBuilder::estimate_total(bool)`** — off by default. When
+  enabled, `.start()` walks the tree twice: once applying the same
+  filters (extension/size/modified-time) to count how many files will
+  match, then again to build the report. New
+  `AnalysisProgress::Started { estimated_entries }` is now always
+  emitted first, before any `EntryAnalyzed`/`EntryHashed` — `Some(count)`
+  only when `.estimate_total(true)` is set, `None` otherwise — so a
+  caller can render a determinate progress bar or ETA instead of only
+  learning the total once the walk finishes. Existing code that counts
+  or matches on `AnalysisProgress` variants needs a wildcard arm, since
+  it's `#[non_exhaustive]`.
+
+### Fixed
+
+- **`.detect_duplicates(true)` no longer hashes empty files.** Every
+  empty file is byte-identical to every other by construction, so a
+  size-0 group of candidates is now folded directly into the duplicate
+  set using a precomputed hash of the empty input, skipping the
+  open+read+hash entirely for it.
+
+- **Duplicate detection now stops promptly on cancellation.**
+  `.cancel()` during `.detect_duplicates(true)` previously only took
+  effect between spawning hash tasks — once the last candidate was
+  queued, cancellation had no effect until every in-flight hash
+  finished. Cancellation is now also checked while draining completed
+  hashes, so a cancel request interrupts a large batch already in
+  flight instead of waiting it out.
+
+- **Fewer redundant allocations while tracking `.top_n_largest()`.**
+  Analyzing a tree used to clone every matched `Entry` that qualified
+  for the top-N heap, even when nothing else needed a second owned copy
+  (i.e. whenever `checksum`'s `.detect_duplicates(true)` isn't also
+  collecting it as a candidate). That entry now moves into the heap
+  directly in the common case, cloning only when both the heap and
+  duplicate-candidate collection genuinely need their own copy.
+
 ## [2.4.0]
 
 ### Added

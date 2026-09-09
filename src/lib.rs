@@ -386,7 +386,8 @@ mod analyze_tests {
 
         assert_eq!(report.file_count, 2);
         assert_eq!(report.total_size, 30);
-        assert_eq!(progress_events, 2);
+        // Started + one EntryAnalyzed per file.
+        assert_eq!(progress_events, 3);
         assert_eq!(report.errors_total, 0);
         assert!(report.duration > std::time::Duration::ZERO);
     }

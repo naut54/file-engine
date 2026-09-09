@@ -31,6 +31,7 @@ pub struct AnalyzeBuilder {
     detect_mime_types: bool,
     max_reported_errors: usize,
     walk_concurrency: Option<usize>,
+    estimate_total: bool,
     #[cfg(feature = "checksum")]
     detect_duplicates: bool,
     #[cfg(feature = "checksum")]
@@ -51,6 +52,7 @@ impl AnalyzeBuilder {
             detect_mime_types: false,
             max_reported_errors: DEFAULT_MAX_REPORTED_ERRORS,
             walk_concurrency: None,
+            estimate_total: false,
             #[cfg(feature = "checksum")]
             detect_duplicates: false,
             #[cfg(feature = "checksum")]
@@ -63,6 +65,10 @@ impl AnalyzeBuilder {
     /// Only files with one of these extensions (case-insensitive,
     /// without the leading dot) are matched. Unset matches any
     /// extension, including files with none.
+    ///
+    /// Applied only after a file is already stat'd — unlike
+    /// `.exclude_globs()`, this never prunes traversal. To skip a whole
+    /// subtree without walking it, use `.exclude_globs()` instead.
     pub fn extensions(mut self, exts: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.filter.extensions = Some(exts.into_iter().map(Into::into).collect());
         self
@@ -70,17 +76,25 @@ impl AnalyzeBuilder {
 
     /// Glob patterns (matched against the path relative to the analyzed
     /// root) that prune traversal entirely — an excluded directory is
-    /// never descended into, not merely omitted from the report.
+    /// never descended into, not merely omitted from the report. The
+    /// only filter here that actually skips the underlying I/O, rather
+    /// than filtering after a file has already been stat'd.
     pub fn exclude_globs(mut self, patterns: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.filter.exclude_patterns = patterns.into_iter().map(Into::into).collect();
         self
     }
 
+    /// Applied only after a file is already stat'd — unlike
+    /// `.exclude_globs()`, this never prunes traversal. To skip a whole
+    /// subtree without walking it, use `.exclude_globs()` instead.
     pub fn min_size(mut self, bytes: u64) -> Self {
         self.filter.min_size = Some(bytes);
         self
     }
 
+    /// Applied only after a file is already stat'd — unlike
+    /// `.exclude_globs()`, this never prunes traversal. To skip a whole
+    /// subtree without walking it, use `.exclude_globs()` instead.
     pub fn max_size(mut self, bytes: u64) -> Self {
         self.filter.max_size = Some(bytes);
         self
@@ -88,6 +102,10 @@ impl AnalyzeBuilder {
 
     /// Only files modified at or after `t` are matched. A file with no
     /// readable modified time never matches once this is set.
+    ///
+    /// Applied only after a file is already stat'd — unlike
+    /// `.exclude_globs()`, this never prunes traversal. To skip a whole
+    /// subtree without walking it, use `.exclude_globs()` instead.
     pub fn modified_after(mut self, t: SystemTime) -> Self {
         self.filter.modified_after = Some(t);
         self
@@ -95,6 +113,10 @@ impl AnalyzeBuilder {
 
     /// Only files modified at or before `t` are matched. A file with no
     /// readable modified time never matches once this is set.
+    ///
+    /// Applied only after a file is already stat'd — unlike
+    /// `.exclude_globs()`, this never prunes traversal. To skip a whole
+    /// subtree without walking it, use `.exclude_globs()` instead.
     pub fn modified_before(mut self, t: SystemTime) -> Self {
         self.filter.modified_before = Some(t);
         self
@@ -128,6 +150,18 @@ impl AnalyzeBuilder {
     /// filesystems.
     pub fn walk_concurrency(mut self, n: usize) -> Self {
         self.walk_concurrency = Some(n);
+        self
+    }
+
+    /// Off by default. When enabled, `.start()` walks the tree twice:
+    /// once to count how many files match the configured filters, then
+    /// again to actually build the report. That first pass reports its
+    /// result as `AnalysisProgress::Started`'s `estimated_entries`
+    /// before any `EntryAnalyzed` events, so a caller can render a
+    /// determinate progress bar or ETA — at the cost of stat-ing every
+    /// file in the tree twice.
+    pub fn estimate_total(mut self, enable: bool) -> Self {
+        self.estimate_total = enable;
         self
     }
 
@@ -204,6 +238,7 @@ impl AnalyzeBuilder {
             collect_duplicate_candidates: detect_duplicates_enabled,
             max_reported_errors: self.max_reported_errors,
             walk_concurrency: self.walk_concurrency.unwrap_or_else(default_concurrency),
+            estimate_total: self.estimate_total,
         };
 
         #[cfg(feature = "checksum")]

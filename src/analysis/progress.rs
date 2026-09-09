@@ -13,6 +13,12 @@ use tokio::sync::mpsc;
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub enum AnalysisProgress {
+    /// Always emitted first, exactly once. `estimated_entries` is `Some`
+    /// only when `AnalyzeBuilder::estimate_total(true)` was set — getting
+    /// a count requires a full extra pass over the tree (stat-ing every
+    /// file against the same filters as the real walk), so it's `None`
+    /// by default rather than paying that cost unconditionally.
+    Started { estimated_entries: Option<usize> },
     /// Emitted once per matched entry (after filters, not per entry
     /// walked) as the tree is scanned.
     EntryAnalyzed { path: PathBuf },
